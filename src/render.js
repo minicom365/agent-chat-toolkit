@@ -757,6 +757,39 @@ export function renderSalvage(result, { styler: st, preview = 12, out = null }) 
   return outLines.join('\n');
 }
 
+/* --------------------------------------------------------------- decrypt */
+
+/**
+ * What a `.pb` container held. The plaintext is a binary protobuf, so this is
+ * deliberately a summary: the payload belongs in a file, not a terminal.
+ */
+export function renderDecrypt(result, { styler: st, out = null }) {
+  const lines = [h(st, 'Decrypted store (.pb, offline)')];
+  lines.push(
+    kv(st, [
+      ['store', result.file],
+      ['container', `${fmtBytes(result.cipherBytes)} \u00b7 ${result.scheme}`],
+      ['key', result.keySource],
+      ['plaintext', fmtBytes(result.plainBytes)],
+      ['trajectory', result.id ?? st.gray('(no id field)')],
+      ['steps', `${fmtInt(result.steps)}${result.truncated ? ' (sampled)' : ''}`],
+      [
+        'text',
+        `${fmtInt(result.prose.runs)} runs \u00b7 longest ${fmtInt(result.prose.longestRun)} chars \u00b7 ~${fmtInt(
+          result.prose.hangul
+        )} Hangul`,
+      ],
+    ])
+  );
+  lines.push('');
+  lines.push(
+    out
+      ? st.green(`  Plaintext protobuf written to ${out}`)
+      : st.gray('  Pass --out <file> to write the decrypted protobuf.')
+  );
+  return lines.join('\n');
+}
+
 /* ----------------------------------------------------------------- query */
 
 export function renderQuery(events, { styler: st, limit }) {

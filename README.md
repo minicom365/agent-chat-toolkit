@@ -48,18 +48,20 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 >     hiding it, and the log does not reach back that far.
 > ```
 >
-> The remaining text is in `conversations/<id>.pb`, which is **encrypted** (entropy
-> 8.000 bits/byte) and not readable offline. Treat any total from a `skel`/`lost`
+> The remaining text is in `conversations/<id>.pb`. It is **encrypted** (entropy
+> 8.000 bits/byte) but fully readable: `agchat decrypt` opens it offline under the
+> fixed key the app itself carries. Treat any total from a `skel`/`lost`
 > conversation as a lower bound.
 >
 > The store has two generations and the **newer** one is the readable one: `.pb`
-> is encrypted (2025-11 … 2026-08-13) while `.db` is plain SQLite whose blobs are
-> ordinary protobuf (2026-08-03 onward). One real install holds **294 `.pb`
-> conversations, 207 of which have no log at all** — for those, the only copy is
-> the ciphertext, and `agchat sessions` marks them `lock`.
+> is AES-256-GCM (2025-11 … 2026-08-13) while `.db` is plain SQLite whose blobs
+> are ordinary protobuf (2026-08-03 onward). One real install holds **294 `.pb`
+> conversations, 207 of which have no log at all** — for those, the ciphertext is
+> the only copy, and `agchat sessions` marks them `lock`.
 >
-> `lock` does not mean lost: `agchat recover --session <id>` launches the bundled
-> language server and exports the whole trajectory — on a real 9,308-step
+> `lock` does not mean lost: `agchat decrypt --session <id>` decrypts the file
+> directly and launches nothing, while `agchat recover --session <id>` exports the
+> same trajectory through the bundled language server — on a real 9,308-step
 > conversation whose transcript log had lost 78% of its head, it returned all
 > 9,308 steps (56.9 MB).
 >
@@ -80,7 +82,9 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 | **`move`** | migrate a VS Code conversation into another workspace's storage, with backups and a dry-run default |
 | **`orphans`** | workspace storages that still hold conversations for a folder that no longer exists |
 | **`migrate`** | move an Antigravity conversation between instances, and file it under another project space |
-| **`recover`** | export the *full* encrypted store of an Antigravity conversation through its language server |
+| **`decrypt`** | decrypt an Antigravity `.pb` store offline — no language server, no port, works on a profile copy |
+| **`salvage`** | recover text from the space a plaintext `.db` store's SQLite pages released |
+| **`recover`** | export the full store of an Antigravity conversation through its language server |
 | **`stats` / `time` / `tools`** | conversation statistics, tool usage and a defensible estimate of effective development time |
 | **`query` / `timeline` / `export`** | raw event access as text, JSON, Markdown or CSV |
 

@@ -40,6 +40,10 @@ $ agchat sessions --limit 6
 | **`find`** | 4단계 상세도 키워드 검색 — 도구 로그에 묻히지 않음 |
 | **`show`** | 필요한 상세도로 대화 1건 재생 |
 | **`move`** | VS Code 대화를 다른 워크스페이스 스토리지로 이전 (기본 dry-run, 자동 백업) |
+| **`migrate`** | Antigravity 대화를 다른 인스턴스로 옮기고 다른 프로젝트 공간에 등록 |
+| **`decrypt`** | Antigravity `.pb` 저장소를 **오프라인에서 복호화** — 언어서버도 포트도 불필요, 프로필 복사본에도 동작 |
+| **`salvage`** | 평문 `.db` 저장소가 더는 돌려주지 않는 SQLite 공간에서 텍스트 복구 |
+| **`recover`** | 언어서버를 통해 Antigravity 대화의 전체 저장소를 내보내기 |
 | **`stats` / `time` / `tools`** | 대화 통계, 도구 사용, 실효 개발시간 추정 |
 | **`query` / `timeline` / `export`** | 원시 이벤트 접근 (텍스트/JSON/Markdown/CSV) |
 

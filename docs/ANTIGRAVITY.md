@@ -6,11 +6,13 @@ records what is actually on disk, what this tool reads, and where the real
 limitation is.
 
 **Short version: the conversation *text* is plaintext JSONL, but no single file
-holds a whole long conversation, and the store that does may be encrypted.** The
-catalog is plain SQLite and the sidebar index is base64-wrapped protobuf. Of the
-two per-conversation stores, the **older** `<id>.pb` is real ciphertext no
-offline key opens, while the **newer** `<id>.db` is plain SQLite — the direction
-of that change is the opposite of what a first look suggests.
+holds a whole long conversation, and the store that does is encrypted — under a
+fixed key that ships inside the app, so it *is* readable offline.** The catalog
+is plain SQLite and the sidebar index is base64-wrapped protobuf. Of the two
+per-conversation stores, the **older** `<id>.pb` is AES-256-GCM ciphertext that
+`agchat decrypt` reads without launching anything, while the **newer** `<id>.db`
+is plain SQLite — the direction of that change is the opposite of what a first
+look suggests.
 
 Four separate things have to be handled, and earlier revisions of this document
 got two of them wrong:
@@ -21,11 +23,14 @@ got two of them wrong:
 2. **`overview.txt` is the recovery source.** It holds the full step skeleton
    (types, timestamps, tool calls) for the steps the transcript dropped.
 3. **`conversations/<id>.pb` is encrypted**, not merely schema-less. Its entropy
-   is 8.000 bits/byte across the whole file, it has no compression or container
-   magic, and no key on the machine decrypts it.
+   is 8.000 bits/byte across the whole file and it has no container magic — but
+   the key is a fixed 32-byte ASCII constant inside the language server, so the
+   container is fully readable offline. See "The `.pb` container" below.
 4. **`conversations/<id>.db` is plaintext.** It is the *newer* generation (the
-   app stopped encrypting around 2026-08-14), and 207 older `.pb` conversations
-   have no log at all, so they are locked in the encrypted store for good.
+   app stopped encrypting around 2026-08-14). Conversations that exist only as
+   `.pb` are no longer locked in the sense of being unreadable — they decrypt —
+   but they still have no log, so an offline decrypt is the only way to read
+   them.
 
 ---
 
@@ -180,9 +185,11 @@ Across all 51 plaintext stores on the profile:
 So the unexplained third of every `.db` is page slack and freelist, and roughly
 **6.3 MB** of prose sits in it that the language server will not hand back.
 
-The encrypted generation is different and gets no such reprieve: a `.pb` is
-ciphertext end to end, so there is no plaintext in its slack, and nothing here
-recovers a cleared step from one.
+The encrypted generation is different: a `.pb` has no SQLite slack to mine, and
+because the app clears a step *before* encrypting, a cleared step is gone from it
+too. It is no longer unreadable, though — it decrypts offline (see "The `.pb`
+container") — so a conversation that exists only as `.pb` can finally be read
+without the server.
 
 `agchat sessions` marks these conversations in the `head` column:
 `full` when the content transcript is complete, `skel` when the head survives
@@ -235,12 +242,12 @@ Checked on a real Windows install, all negative:
 - The encryption scheme has changed across Antigravity releases, so a decryption
   routine written for one version does not carry over.
 
-**Practical consequence:** the key is not derivable offline, but it does not
-need to be — the bundled language server holds it. `agchat recover` exports the
-full trajectory through that server (see "Exporting a `lock`ed conversation").
-The `overview.txt` merge remains the only offline source, and a conversation
-with a `skel`/`lost` head reported by `stats` is still a **lower bound** until
-`recover` is run.
+**Practical consequence:** the key is not *derivable* offline, but it does not
+have to be — it is a constant inside the binary, and this tool now carries it.
+Either `agchat decrypt` (offline, no process) or `agchat recover` (through the
+server) reads a `.pb`. The `overview.txt` merge is still the fallback for a
+conversation that has a log; for the 207 that have none, `decrypt` is the only
+route. Neither can restore a step the app cleared before encrypting.
 
 ### A memory scan for the key, and why its negative is not a result
 
@@ -280,11 +287,81 @@ None of this blocks recovery: the key would decrypt the same bytes the API
 already serves, and `GetCascadeTrajectorySteps` returns every step the store
 still holds.
 
+### What the scan got wrong, and how the key was actually obtained
+
+The sweep assumed the key was **16 bytes** and the mode **CTR**, because that is
+what the upstream tool documents. Both assumptions were wrong: the key is **32
+bytes** and the mode is **GCM**. A scanner that only asks "does this window
+decrypt to something parseable?" cannot see either error, which is why 320
+million windows produced nothing useful.
+
+A breakpoint found it immediately. The obstacle is that `language_server.exe`
+ships no symbols cdb can resolve, so the address has to come out of the binary's
+own function table:
+
+1. The Go `pclntab` lives in `.rdata` at file offset **62,796,864** (magic
+   `0xFFFFFFF1`, `nfunc` 185,482). Walking it yields a name and an `entryOff` for
+   every function.
+2. **`entryOff` is relative to the `.text` section, not to the image base.** In
+   this binary the header's `textStart` field reads `0`, so the natural
+   `rva = textStart + entryOff` is wrong by exactly `0x1000`. Using `.text`'s
+   virtual address (`rva = 0x1000 + entryOff`) lands on the Go prologue
+   `49 3B 66 10` (`cmp rsp,[r14+10h]`) for every function checked — 5 of 5.
+3. With the corrected RVA, cdb fires on `crypto/aes.NewCipher` (`+0x4360a0`),
+   whose first argument *is* the key. The same load also reaches
+   `proto_saver.DiskSaver.loadUnlocked` (`+0x2258d80`), and that receiver holds
+   the identical slice at offset `0x40` — two independent sightings of one key.
+
+```
+0000159c`4e39e180  73 61 66 65 43 6f 64 65-69 75 6d 77 6f 72 6c 64  safeCodeiumworld
+0000159c`4e39e190  4b 65 59 73 65 63 72 65-74 42 61 6c 6c 6f 6f 6e  KeYsecretBalloon
+```
+
+Two things mark this as *the* key rather than a coincidence: it is printable
+ASCII where every other `NewCipher` call in the same run carried random binary
+(those are TLS session keys), and it is stable across calls.
+
+## The `.pb` container
+
+```
+[0 .. 12)        nonce, random per file
+[12 .. len-16)   AES-256-GCM ciphertext
+[len-16 .. len)  authentication tag
+key              safeCodeiumworldKeYsecretBalloon   (32 bytes, fixed)
+```
+
+GCM is *authenticated*, which makes the claim self-verifying: a wrong key or a
+single flipped byte fails rather than returning plausible garbage. Verified on
+`0201445e…` (98.7 KB) and `cfad63bc…` (79.29 MB, decrypted in 70 ms), and
+cross-checked against the server — the offline decrypt reports **7 steps** for
+`0201445e…`, exactly what `GetCascadeTrajectorySteps` returns for it.
+
+The plaintext is a `Trajectory`: field 1 is the trajectory id, then one field 2
+per step, then a large field 3 blob. Note the file name is the **cascade** id,
+which is a different UUID from the trajectory id inside it.
+
+```
+$ agchat decrypt -s 0201445e --instance antigravity --out 0201445e.pb.plain
+Decrypted store (.pb, offline)
+store       …/antigravity/conversations/0201445e-…d85f…pb
+container   98.7KB · nonce(12) + AES-256-GCM + tag(16)
+plaintext   98.7KB
+trajectory  2d5dc86b-e9a6-4668-bed5-00fc5832b4ea
+steps       7
+text        614 runs · longest 4,309 chars · ~2,817 Hangul
+```
+
+This matters beyond convenience: `decrypt` needs **no running app, no port and no
+cooperation from the server**, so it also works on a profile copy the app is not
+managing, on conversations the server declines to enumerate, and on a machine
+where the app can no longer start.
+
 ## Exporting a `lock`ed conversation
 
-The key is not derivable offline, but the bundled language server holds it and
-will decrypt any `.pb` it can load. `agchat` drives that server directly, so a
-conversation that is unreadable in the app UI can still be exported in full:
+`agchat decrypt` reads the store directly and is usually what you want. The
+language server stays useful when you need *its* view — to confirm what the app
+itself can still serve. `agchat recover` drives that server, so a conversation
+that is unreadable in the app UI can still be exported in full:
 
 ```
 $ agchat recover --session 44166d34

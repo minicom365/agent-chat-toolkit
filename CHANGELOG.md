@@ -4,6 +4,52 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-01
+
+### Added
+
+- **`agchat decrypt`** — reads an Antigravity `.pb` store offline, with no process
+to launch and no port to discover.
+
+  The container had been recorded as unopenable, and the earlier memory sweep for
+  its key came back empty. The sweep was built on two wrong assumptions inherited
+  from the upstream tool: that the key is 16 bytes and the mode is CTR. It is a
+  **32-byte** key and **AES-256-GCM**.
+
+  ```
+  [0 .. 12)        nonce, random per file
+  [12 .. len-16)   AES-256-GCM ciphertext
+  [len-16 .. len)  authentication tag
+  key              safeCodeiumworldKeYsecretBalloon   (32 bytes, fixed)
+  ```
+
+  The key was read out of the running language server. cdb cannot resolve Go
+  symbols in that binary, so the address comes from its own function table — and
+  the non-obvious step is that the `pclntab` `entryOff` is relative to the
+  `.text` section, not the image base (`textStart` reads `0`, so the natural
+  `textStart + entryOff` is wrong by `0x1000`; the corrected value lands on the
+  Go prologue for every function checked). With that, breaking on
+  `crypto/aes.NewCipher` prints the key as its first argument, and the
+  `DiskSaver` receiver holds the same slice at offset `0x40`.
+
+  GCM is authenticated, so the claim verifies itself: a wrong key fails instead
+  of returning plausible bytes. Cross-checked against the server too — the
+  offline decrypt of `0201445e…` reports **7 steps**, exactly what
+  `GetCascadeTrajectorySteps` returns for it.
+
+- **`src/hosts/antigravity-crypto.js`** — container parsing and decryption on
+  `node:crypto`, so the toolkit stays dependency free. 16 new specs cover the
+  round trip, a wrong key, a tampered ciphertext and a tampered tag, plus the
+  protobuf framing used to count steps.
+
+### Changed
+
+- `docs/ANTIGRAVITY.md`, `README.md` and `docs/TRANSCRIPT-FORMAT.md` no longer
+  claim a `.pb` cannot be read offline, and the inconclusive-scan section now
+  records what the scan got wrong.
+- `agchat salvage` on a `.pb`-only conversation now points at `decrypt` instead
+  of saying the store is "ciphertext end to end".
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

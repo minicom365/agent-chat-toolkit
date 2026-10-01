@@ -10,6 +10,7 @@ import {
   exportCsv,
   exportJson,
   exportMarkdown,
+  renderDecrypt,
   renderHosts,
   renderMigrationPlan,
   renderMovePlan,
@@ -36,13 +37,14 @@ import {
   readRegistration,
 } from './hosts/antigravity-migrate.js';
 import { salvageFile } from './hosts/antigravity-salvage.js';
+import { decryptPb, describeTrajectory } from './hosts/antigravity-crypto.js';
 import { countSteps, defaultLsBinary, recoverTrajectory } from './hosts/antigravity-recover.js';
 import { LEVEL_DEFAULT_CHARS, levelName, searchSessions } from './search.js';
 import { SafetyError, formatSafetyError } from './safety.js';
 import { openReadOnly, sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
@@ -63,6 +65,7 @@ COMMANDS
   orphans                workspace storages whose workspace is gone but chats remain
   migrate                move an Antigravity conversation to another instance/project
   salvage                recover text from a store's released SQLite pages
+  decrypt                decrypt a .pb store offline (no language server needed)
   recover                export the FULL encrypted store of an Antigravity conversation
   stats                  statistics for one transcript (default)
   time                   effective development time detail
@@ -123,6 +126,14 @@ RECOVERING A CONVERSATION (Antigravity, via the language server)
   NOTE: recovery pages GetCascadeTrajectorySteps, so the 64 MiB ceiling that
         truncates GetCascadeTrajectory does not apply. Steps the app itself
         CLEARED keep only their metadata; that content is gone from the store.
+
+DECRYPTING A STORE OFFLINE (Antigravity)
+  agchat decrypt -s <id>    decrypt the .pb store on disk, launching nothing
+      --out <file>          where to write the plaintext protobuf
+      --instance <name>     pick the instance when the id exists in several
+  NOTE: the container is nonce(12) + AES-256-GCM + tag(16) under a fixed key
+        built into the language server, so this needs no process and no port,
+        and it works on a profile copy the app is not managing.
 
 FILTERS (query / timeline / export)
       --type <t>          event type, repeatable / comma separated
@@ -188,6 +199,8 @@ export async function main(argv) {
         return await cmdSalvage(opts, st);
       case 'recover':
         return await cmdRecover(opts, st);
+      case 'decrypt':
+        return await cmdDecrypt(opts, st);
       case 'stats':
       case 'time':
       case 'tools':
@@ -468,7 +481,8 @@ async function cmdSalvage(opts, st) {
     throw new Error(
       `No plaintext .db store for ${one.id} in ${one.instance}. ` +
         'Only the plaintext generation keeps readable text in its released pages — ' +
-        'a .pb is ciphertext end to end. Use `agchat recover` for those.'
+        'a .pb is encrypted, not SQLite. Use `agchat decrypt` for those, or ' +
+        '`agchat recover` to fetch them through the language server.'
     );
   }
 
@@ -621,6 +635,56 @@ async function cmdRecover(opts, st) {
     `wrote ${path.resolve(out)} (${steps} steps, ${(Buffer.byteLength(text) / 1048576).toFixed(1)} MB)\n`
   );
   return 0;
+}
+
+/* --------------------------------------------------------------- decrypt */
+
+/**
+ * Decrypt an Antigravity `.pb` store offline.
+ *
+ * This is the same store `recover` fetches over the language server, but read
+ * straight off disk: nothing to launch, no port to discover, and no dependence
+ * on the app being able to enumerate the conversation. The container format and
+ * key are fixed, so it also works on a profile copy the app never opened.
+ */
+async function cmdDecrypt(opts, st) {
+  if (!opts.session) throw new SafetyError('decrypt needs --session <id>.', 'NO_SESSION');
+
+  const sessions = await allSessions({ hosts: ['antigravity'], roots: opts.root });
+  const pool = opts.instance ? sessions.filter((s) => s.instance === opts.instance) : sessions;
+  const one = findSession(pool, opts.session);
+  if (!one) throw new Error(`No conversation matched --session ${opts.session}`);
+  if (one.host !== 'antigravity') {
+    throw new Error(`decrypt only supports the antigravity host (got ${one.host}).`);
+  }
+
+  const stores = await listStores(one.instance);
+  const store = stores.get(one.id)?.files.find((f) => f.kind === 'pb');
+  if (!store) {
+    throw new Error(
+      `No .pb store for ${one.id} in ${one.instance}. ` +
+        'This conversation is on the plaintext generation — try `agchat salvage`.'
+    );
+  }
+
+  const buf = await fsp.readFile(store.path);
+  const plain = decryptPb(buf);
+  const { bytes, ...info } = describeTrajectory(plain);
+  const result = {
+    file: store.path,
+    cipherBytes: buf.length,
+    plainBytes: bytes,
+    scheme: 'nonce(12) + AES-256-GCM + tag(16)',
+    keySource: 'built-in disk key',
+    ...info,
+  };
+
+  if (opts.json) return writeOut(JSON.stringify(result, null, 2), opts);
+  if (opts.out) await fsp.writeFile(String(opts.out), plain);
+  const rendered = renderDecrypt(result, { styler: st, out: opts.out ? String(opts.out) : null });
+  // The summary goes to stdout even when --out captured the protobuf, otherwise
+  // writeOut would overwrite the payload we just wrote with the summary text.
+  return writeOut(rendered, opts.out ? { ...opts, out: null } : opts);
 }
 
 /* --------------------------------------------------------------- analysis */

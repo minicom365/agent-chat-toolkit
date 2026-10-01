@@ -121,7 +121,8 @@ skeleton entry therefore scores 0 and can never displace a real one.
 The merge restores the early *timeline* and tool calls of a truncated session, but
 not its prose: `coverageOf()` reports `steps` and `textSteps` separately, and
 `stats` warns when the two disagree. The missing text is in
-`conversations/<id>.pb`, which is encrypted and not readable offline.
+`conversations/<id>.pb`, which is encrypted but readable offline with
+`agchat decrypt` (see `docs/ANTIGRAVITY.md` for the container).
 
 ### Event types
 
@@ -172,8 +173,9 @@ cannot steal the next one.
    and `tool_calls` survive — which is why a truncated conversation can still be
    read as a timeline.
 9. **The `.pb` store is encrypted, the `.db` store is not.** `.pb` is the older
-   generation (to ~2026-08-13) and needs a key that is not on disk; `.db` is the
-   newer one and is plain SQLite with plain protobuf blobs. `sessions` shows `lock`
+   generation (to ~2026-08-13) and is AES-256-GCM under a fixed key the app
+   carries, so `agchat decrypt` reads it without the server; `.db` is the newer
+   one and is plain SQLite with plain protobuf blobs. `sessions` shows `lock`
    when a conversation exists only in the former.
 
 ---
