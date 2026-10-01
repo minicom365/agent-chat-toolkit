@@ -7,7 +7,6 @@ descriptive reference, not an official specification.
 ---
 
 ## VS Code (Copilot Chat)
-
 Root: the VS Code user-data directory — `%APPDATA%\<Product>\User` on Windows,
 `~/Library/Application Support/<Product>/User` on macOS,
 `$XDG_CONFIG_HOME/<Product>/User` on Linux.
@@ -81,24 +80,33 @@ last-message timestamp.
 
 ## Antigravity
 
-Root: `~/.gemini/<appDataDir>/`, where `appDataDir` is `antigravity`,
-`antigravity-ide`, `antigravity-backup`, … (all `*antigravity*` directories are
-scanned).
+Root: `~/.gemini/<instance>/`. Every `*antigravity*` directory is discovered as a
+separate **instance** — current app, IDE build, older snapshot, and the history
+extension's cache. Each is catalogued independently; see
+[ANTIGRAVITY.md](ANTIGRAVITY.md) for the deep dive, including what is plaintext,
+what is protobuf, and why the language server is not needed.
 
 ```
-~/.gemini/antigravity/
+~/.gemini/<instance>/
     conversation_summaries.db                  SQLite: the authoritative catalog
-    conversations/<id>.pb | <id>.db             protobuf / SQLite per-conversation state
+    conversations/<id>.pb | <id>.db             protobuf | SQLite per-conversation store
     annotations/<id>.pbtxt                      title, last_user_view_time
+    cache.json                                  (history extension only) cached catalog
     brain/<conversationId>/
-        .system_generated/logs/transcript.jsonl        step log (truncated)
         .system_generated/logs/transcript_full.jsonl   step log (untruncated)  <- preferred
+        .system_generated/logs/transcript.jsonl        step log (truncated)
         .system_generated/logs/chunks/…                chunked copies
         .system_generated/steps/<n>                    per-step blobs
         .system_generated/messages/<id>.json           queued messages
         scratch/*                                      scratch code written by the agent
         *.md                                           markdown artifacts
+
+<appProfile>/User/globalStorage/state.vscdb         what the sidebar shows
+    ItemTable['antigravityUnifiedStateSync.trajectorySummaries']   base64 protobuf
 ```
+
+Instance directories seen on a real machine: `antigravity`, `antigravity-ide`,
+`antigravity-backup`, `antigravity-history`, `antigravity-browser-profile`.
 
 ### The catalog
 
@@ -131,8 +139,14 @@ failure rates available at all.
 
 ### Pitfalls
 
-1. **`CONVERSATION_HISTORY` events carry no `content`** — they are markers, not titles.
-   Titles come from `conversation_summaries.db` or `annotations/<id>.pbtxt`.
+1. **Content and visibility live in different places.** A complete transcript can
+exist while the sidebar index does not list it. `agchat sessions` reports this as
+`idx = no`, and `--recoverable` narrows to the ones this tool can still read.
+2. **`conversations/<id>.db` is the old store format** and `conversations/<id>.pb`
+the current one; the old format correlates strongly with being unlisted.
+3. **`CONVERSATION_HISTORY` events carry no `content`** — they are markers, not titles.
+   Titles come from `conversation_summaries.db`, the sidebar index, or
+   `annotations/<id>.pbtxt`.
 2. **`title` is frequently empty** in the catalog; fall back to `preview`, then to the
    annotation file, then to `(untitled)`.
 3. **Only a fraction of `brain/<id>` folders have a transcript.** Empty or crashed

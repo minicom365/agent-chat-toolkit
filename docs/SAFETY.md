@@ -41,7 +41,7 @@ HOST_RUNNING Code.exe (or Antigravity) is running
 
 ## What a migration touches
 
-`transcript-stats move` copies, never moves:
+`agchat move` copies, never moves:
 
 ```
 source storage                            target storage
@@ -80,8 +80,8 @@ For isolation stronger than a temp directory, run the same suite in a container 
 network and no host mounts:
 
 ```bash
-docker build -f Dockerfile.verify -t transcript-stats-verify .
-docker run --rm --network none transcript-stats-verify
+docker build -f Dockerfile.verify -t agchat-verify .
+docker run --rm --network none agchat-verify
 ```
 
 ## If you do want to write to the real profile

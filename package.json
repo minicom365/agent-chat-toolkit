@@ -1,7 +1,7 @@
 {
-  "name": "copilot-transcript-stats",
-  "version": "0.2.0",
-  "description": "Zero-dependency CLI to analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity: statistics, tool usage, effective development time and conversation migration.",
+  "name": "agent-chat-toolkit",
+  "version": "0.3.0",
+  "description": "Zero-dependency CLI to analyse and navigate agent conversations kept on disk by VS Code Copilot Chat and Antigravity (app, IDE and backup instances): statistics, tool usage, effective development time, search and conversation migration.",
   "keywords": [
     "copilot",
     "copilot-chat",
@@ -21,7 +21,7 @@
     "node": ">=18"
   },
   "bin": {
-    "transcript-stats": "bin/transcript-stats.js"
+    "agchat": "bin/agchat.js"
   },
   "main": "src/index.js",
   "files": [
@@ -34,7 +34,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "start": "node bin/transcript-stats.js",
+    "start": "node bin/agchat.js",
     "test": "node --test \"test/**/*.test.js\"",
     "sandbox": "node tools/sandbox-e2e.mjs",
     "sandbox:make": "node tools/make-sandbox.mjs --out .sandbox --force",
@@ -42,10 +42,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/minicom365/copilot-transcript-stats.git"
+    "url": "https://github.com/minicom365/agent-chat-toolkit.git"
   },
   "bugs": {
-    "url": "https://github.com/minicom365/copilot-transcript-stats/issues"
+    "url": "https://github.com/minicom365/agent-chat-toolkit/issues"
   },
-  "homepage": "https://github.com/minicom365/copilot-transcript-stats#readme"
+  "homepage": "https://github.com/minicom365/agent-chat-toolkit#readme"
 }

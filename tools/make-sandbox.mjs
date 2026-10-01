@@ -14,7 +14,9 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-import { writeIndex, sqliteAvailable } from '../src/sqlite.js';
+import { writeIndex, writeItem, sqliteAvailable } from '../src/sqlite.js';
+import { SIDEBAR_KEY } from '../src/hosts/antigravity-index.js';
+import { buildSidebarIndex } from './sandbox-protobuf.mjs';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = sqliteAvailable() ? require('node:sqlite') : {};
@@ -39,6 +41,27 @@ const ANTIGRAVITY = {
   id: '22222222-2222-4222-8222-222222222222',
   title: 'Sandbox antigravity conversation',
   workspace: 'file:///home/sandbox/projects/beta',
+};
+
+/** Same instance, but absent from the sidebar index (the "lost" case). */
+const AG_LEGACY = {
+  id: '44444444-4444-4444-8444-444444444444',
+  title: 'Sandbox legacy conversation',
+  workspace: 'file:///home/sandbox/projects/beta',
+};
+
+/** A second instance (`antigravity-ide`) with its own app profile. */
+const AG_IDE = {
+  id: '55555555-5555-4555-8555-555555555555',
+  title: 'Sandbox IDE conversation',
+  workspace: 'file:///home/sandbox/projects/gamma',
+};
+
+/** A third instance that is a snapshot: no app profile indexes it. */
+const AG_BACKUP = {
+  id: '66666666-6666-4666-8666-666666666666',
+  title: 'Sandbox backup conversation',
+  workspace: 'file:///home/sandbox/projects/delta',
 };
 
 const STORAGE_A = 'aaaaaaaa11111111';
@@ -339,6 +362,22 @@ export async function makeSandbox(outDir, { force = false } = {}) {
     path.join(agDir, 'annotations', `${ANTIGRAVITY.id}.pbtxt`),
     `title:"${ANTIGRAVITY.title}" last_user_view_time:{seconds:1767600000}\n`
   );
+
+  // --- second conversation in the same instance, missing from the sidebar index ---
+  await fsp.mkdir(path.join(agDir, 'brain', AG_LEGACY.id, '.system_generated', 'logs'), { recursive: true });
+  await fsp.mkdir(path.join(agDir, 'conversations'), { recursive: true });
+  await fsp.writeFile(
+    path.join(agDir, 'brain', AG_LEGACY.id, '.system_generated', 'logs', 'transcript.jsonl'),
+    antigravityTranscript({
+      id: AG_LEGACY.id,
+      ask: 'This conversation is not in the sidebar index.',
+      final: 'Its content is still on disk and readable.',
+    })
+  );
+  // legacy per-conversation store (`.db`), the state that correlates with the loss
+  await fsp.writeFile(path.join(agDir, 'conversations', `${AG_LEGACY.id}.db`), 'sandbox-legacy-store\n');
+  await fsp.writeFile(path.join(agDir, 'conversations', `${ANTIGRAVITY.id}.pb`), 'sandbox-current-store\n');
+
   const wroteDb = antigravitySummaryDb(path.join(agDir, 'conversation_summaries.db'), [
     [
       ANTIGRAVITY.id,
@@ -352,7 +391,91 @@ export async function makeSandbox(outDir, { force = false } = {}) {
       '2026-01-05 09:00:00.0000000+00:00',
       0,
     ],
+    [
+      AG_LEGACY.id,
+      AG_LEGACY.title,
+      'This conversation is not in the sidebar index.',
+      9,
+      '2026-01-04 09:04:00.0000000+00:00',
+      JSON.stringify([AG_LEGACY.workspace]),
+      'CASCADE_RUN_STATUS_IDLE',
+      'antigravity',
+      '2026-01-04 09:00:00.0000000+00:00',
+      0,
+    ],
   ]);
+
+  // --- second instance: the IDE build, with its own app profile ---
+  const agIdeDir = path.join(root, '.gemini', 'antigravity-ide');
+  await fsp.mkdir(path.join(agIdeDir, 'brain', AG_IDE.id, '.system_generated', 'logs'), { recursive: true });
+  await fsp.mkdir(path.join(agIdeDir, 'conversations'), { recursive: true });
+  await fsp.writeFile(
+    path.join(agIdeDir, 'brain', AG_IDE.id, '.system_generated', 'logs', 'transcript_full.jsonl'),
+    antigravityTranscript({
+      id: AG_IDE.id,
+      ask: 'The IDE build keeps its own conversations.',
+      final: 'Read from the antigravity-ide instance.',
+    })
+  );
+  await fsp.writeFile(path.join(agIdeDir, 'conversations', `${AG_IDE.id}.pb`), 'sandbox-ide-store\n');
+  antigravitySummaryDb(path.join(agIdeDir, 'conversation_summaries.db'), [
+    [
+      AG_IDE.id,
+      AG_IDE.title,
+      'The IDE build keeps its own conversations.',
+      4,
+      '2026-01-03 09:04:00.0000000+00:00',
+      JSON.stringify([AG_IDE.workspace]),
+      'CASCADE_RUN_STATUS_IDLE',
+      'antigravity-ide',
+      '2026-01-03 09:00:00.0000000+00:00',
+      0,
+    ],
+  ]);
+
+  // --- third instance: a snapshot no live app profile indexes ---
+  const agBackupDir = path.join(root, '.gemini', 'antigravity-backup');
+  await fsp.mkdir(path.join(agBackupDir, 'brain', AG_BACKUP.id, '.system_generated', 'logs'), { recursive: true });
+  await fsp.mkdir(path.join(agBackupDir, 'conversations'), { recursive: true });
+  await fsp.writeFile(
+    path.join(agBackupDir, 'brain', AG_BACKUP.id, '.system_generated', 'logs', 'transcript_full.jsonl'),
+    antigravityTranscript({
+      id: AG_BACKUP.id,
+      ask: 'This instance is a snapshot of an older profile.',
+      final: 'No live app profile lists it.',
+    })
+  );
+  await fsp.writeFile(path.join(agBackupDir, 'conversations', `${AG_BACKUP.id}.pb`), 'sandbox-backup-store\n');
+
+  // --- app profiles: the state that decides what the sidebar shows ---
+  const profileRoot = path.join(root, 'profiles');
+  const profiles = [
+    { product: 'Antigravity', ids: [ANTIGRAVITY.id] },
+    { product: 'Antigravity IDE', ids: [AG_IDE.id] },
+  ];
+  if (sqliteAvailable()) {
+    for (const p of profiles) {
+      const dbFile = path.join(profileRoot, p.product, 'User', 'globalStorage', 'state.vscdb');
+      await fsp.mkdir(path.dirname(dbFile), { recursive: true });
+      const db = new DatabaseSync(dbFile);
+      db.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value BLOB)');
+      db.close();
+      const payload = buildSidebarIndex(
+        p.ids.map((id, n) => {
+          const meta = [ANTIGRAVITY, AG_LEGACY, AG_IDE, AG_BACKUP].find((x) => x.id === id) ?? {};
+          return {
+            id,
+            title: meta.title,
+            steps: 7 + n,
+            createdMs: T0,
+            updatedMs: T0 + (10 + n) * MIN,
+            workspaceUris: [meta.workspace].filter(Boolean),
+          };
+        })
+      );
+      writeItem(dbFile, SIDEBAR_KEY, payload);
+    }
+  }
 
   return {
     root,
@@ -360,11 +483,17 @@ export async function makeSandbox(outDir, { force = false } = {}) {
     storeA,
     storeB,
     agDir,
+    agIdeDir,
+    agBackupDir,
+    profileRoot,
     storageA: STORAGE_A,
     storageB: STORAGE_B,
     sessionAlpha: SESSIONS.alpha.id,
     sessionOrphan: SESSIONS.orphan.id,
     sessionAntigravity: ANTIGRAVITY.id,
+    sessionAgLegacy: AG_LEGACY.id,
+    sessionAgIde: AG_IDE.id,
+    sessionAgBackup: AG_BACKUP.id,
     sqlite: sqliteAvailable(),
     antigravityCatalog: wroteDb,
   };

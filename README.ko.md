@@ -1,4 +1,4 @@
-# copilot-transcript-stats
+# agent-chat-toolkit
 
 **에디터가 디스크에 남기는 에이전트 대화를 분석·탐색하는 의존성 없는 CLI — VS Code Copilot Chat 과 Antigravity.**
 
@@ -14,14 +14,21 @@
 - 지난달 그 대화는 어디에 있고, 어떻게 되찾는가?
 
 ```
-$ transcript-stats sessions --limit 6
+$ agchat sessions --limit 6
 
- #  host         updated              index   title                          project                session   log       size
---  -----------  -------------------  ------  -----------------------------  ---------------------  --------  --------  ------
- 1  vscode       2026-10-01 09:12:41          Refactoring the media pipeline  /home/me/projects/app  7132da86            65.8MB
- 2  antigravity  2026-09-28 15:43:17          Sandbox antigravity session     /home/me/projects/app  6f36e30a            155.8KB
- 3  vscode       2026-09-28 16:49:46  orphan  (unindexed chat)               /home/me/projects/app  bdc5fad2  no-log      1.9KB
+ #  host         instance            updated              idx  store  index   title                   project                session   log       size
+--  -----------  ------------------  -------------------  ---  -----  ------  ----------------------  ---------------------  --------  --------  ------
+ 1  vscode                            2026-10-01 09:12:41  ?    -             Refactoring the media  /home/me/projects/app  7132da86            65.8MB
+ 2  antigravity  antigravity         2026-09-28 15:43:17  yes  pb            Fixed the printer      /home/me/projects/app  6f36e30a            155.8KB
+ 3  antigravity  antigravity         2026-09-20 11:04:52  no   db            Legacy conversation    /home/me/projects/app  c2d4ded1            581.5KB
+ 4  antigravity  antigravity-ide     2026-09-21 12:48:32  yes  pb            IDE build conversation  /home/me/projects/app  5f124878            780.1KB
+ 5  antigravity  antigravity-backup  2026-08-30 02:11:07  ?    pb            Snapshot of an old profile  /home/me/projects/app  9b3f21aa       1.2MB
+ 6  vscode                            2026-09-28 16:49:46  ?    -     orphan  (unindexed chat)       /home/me/projects/app  bdc5fad2  no-log      1.9KB
 ```
+
+`idx`는 **앱 자체 인덱스가 그 대화를 나열하는지**입니다. 3번 행은 디스크에 있고 읽을
+수도 있지만 사이드바에 없습니다 — 대화가 "사라진 것처럼" 보이는 바로 그 상태입니다.
+[docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md) 참고.
 
 ---
 
@@ -29,7 +36,7 @@ $ transcript-stats sessions --limit 6
 
 | 명령 | 목적 |
 | --- | --- |
-| **`sessions`** | 호스트·워크스페이스·프로필을 넘나드는 단일 대화 목록 — 에디터가 "잊어버린" 대화 포함 |
+| **`sessions`** | 호스트·인스턴스·워크스페이스·프로필을 넘나드는 단일 대화 목록 — 에디터가 "잊어버린" 대화 포함 |
 | **`find`** | 4단계 상세도 키워드 검색 — 도구 로그에 묻히지 않음 |
 | **`show`** | 필요한 상세도로 대화 1건 재생 |
 | **`move`** | VS Code 대화를 다른 워크스페이스 스토리지로 이전 (기본 dry-run, 자동 백업) |
@@ -76,8 +83,8 @@ $ transcript-stats sessions --limit 6
 Node.js **18+**, 런타임 의존성 **0개**.
 
 ```bash
-git clone https://github.com/minicom365/copilot-transcript-stats.git
-cd copilot-transcript-stats
+git clone https://github.com/minicom365/agent-chat-toolkit.git
+cd agent-chat-toolkit
 npm link
 ```
 
@@ -86,13 +93,20 @@ npm link
 | 호스트 | 대화가 있는 곳 |
 | --- | --- |
 | `vscode` | `<User>/workspaceStorage/<hash>/` — `chatSessions/*.jsonl`, `GitHub.copilot-chat/transcripts/*.jsonl`, `state.vscdb` 인덱스 |
-| `antigravity` | `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript*.jsonl` + `conversation_summaries.db` |
+| `antigravity` | `~/.gemini/<instance>/brain/<id>/.system_generated/logs/transcript*.jsonl` + `conversation_summaries.db` |
 
-전체 레이아웃과 SQLite 스키마, 파싱 함정은 [docs/HOSTS.md](docs/HOSTS.md) 참고.
+**인스턴스**는 한 호스트의 설치본/스냅샷 단위입니다. Antigravity는 여러 개를 둡니다:
+`antigravity`(앱), `antigravity-ide`(IDE 빌드), `antigravity-backup`(구 프로파일 스냅샷),
+`antigravity-history`(서드파티 캐시). `~/.gemini/*antigravity*` 로 일반적으로 탐색하며
+각각 별도로 목록화합니다. 백업에만 남은 대화도 찾습니다.
+
+전체 레이아웃·SQLite 스키마·파싱 함정은 [docs/HOSTS.md](docs/HOSTS.md),
+무엇이 평문이고 무엇이 protobuf이며 왜 랭귀지서버가 필요 없는지는
+[docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md) 참고.
 
 VS Code 탐색 대상: `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Windsurf`, `Trae`
-(Windows/macOS/Linux). `VSCODE_USER_DIR` / `GEMINI_DIR` 또는 `--root <dir>`로 덮어쓸 수
-있습니다.
+(Windows/macOS/Linux). `VSCODE_USER_DIR` / `GEMINI_DIR` / `ANTIGRAVITY_PROFILE_DIR`
+또는 `--root <dir>`로 덮어쓸 수 있습니다.
 
 ## 상세도 레벨 (`find`, `show`)
 
@@ -106,9 +120,20 @@ VS Code 탐색 대상: `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Windsur
 검색은 레벨 인지형입니다. 레벨 2 검색은 도구 로그에 묻히지 않습니다.
 
 ```bash
-transcript-stats find -k "마이그레이션" -l 2 --max-results 5
-transcript-stats find -k "ETIMEDOUT" -l 4 --grep-scope output
-transcript-stats show -s 6f36e30a -l 3 > 대화.md
+agchat find -k "마이그레이션" -l 2 --max-results 5
+agchat find -k "ETIMEDOUT" -l 4 --grep-scope output
+agchat show -s 6f36e30a -l 3 > 대화.md
+```
+
+### 대화 선택
+
+```bash
+-s, --session <id|prefix|title>   대화 id, 고유 접두어, 제목 일부
+    --host <vscode|antigravity>   호스트 제한 (반복 가능)
+    --instance <name>             인스턴스 제한 (예: backup, ide)
+    --not-indexed                 디스크에는 있지만 앱 인덱스에 없는 대화
+    --recoverable                 그중 이 도구로 읽을 수 있는 대화
+    --root <dir>                  추가 탐색 디렉터리 (반복 가능)
 ```
 
 ## 대화 이전 (`move`)
@@ -118,10 +143,10 @@ VS Code 대화(채팅 상태 + 에이전트 트랜스크립트 + 히스토리 �
 
 ```bash
 # 1. 계획만 확인 (아무것도 쓰지 않음)
-transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User
+agchat move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User
 
 # 2. 실행 (에디터를 완전히 종료한 뒤에만)
-transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User --apply
+agchat move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User --apply
 ```
 
 - `--data-dir` **필수** — 암묵적 대상이 없습니다.
@@ -142,8 +167,8 @@ transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User -
 npm run verify     # 단위 테스트 + 샌드박스 E2E
 npm run sandbox    # 샌드박스 E2E만 (임시 트리 생성 후 삭제)
 
-docker build -f Dockerfile.verify -t transcript-stats-verify .
-docker run --rm --network none transcript-stats-verify
+docker build -f Dockerfile.verify -t agchat-verify .
+docker run --rm --network none agchat-verify
 ```
 
 샌드박스는 가짜 VS Code 스토리지(`state.vscdb`, 고아 세션 포함)와 가짜 Antigravity
@@ -169,7 +194,7 @@ docker run --rm --network none transcript-stats-verify
 ## 라이브러리 API
 
 ```js
-import { allSessions, parseTranscript, computeStats, findSession } from 'copilot-transcript-stats';
+import { allSessions, parseTranscript, computeStats, findSession } from 'agent-chat-toolkit';
 
 const sessions = await allSessions();                     // 두 호스트 모두
 const one = findSession(sessions, '6f36e30a');
@@ -180,7 +205,7 @@ const stats = computeStats(parsed, { capMs: 300_000 });
 ## 개발
 
 ```bash
-npm run verify     # 55 단위 스펙 + 46 샌드박스 검사
+npm run verify     # 65 단위 스펙 + 58 샌드박스 검사
 ```
 
 테스트는 완전히 합성된 트랜스크립트와 손으로 계산한 기댓값을 사용하므로, 모든 시간

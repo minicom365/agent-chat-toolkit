@@ -29,13 +29,13 @@ import { SafetyError, formatSafetyError } from './safety.js';
 import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
-const HELP = `copilot-transcript-stats ${VERSION}
+const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
 
 USAGE
-  transcript-stats <command> [options]
+  agchat <command> [options]
 
 HOSTS
   vscode       VS Code Copilot Chat  (transcripts/*.jsonl event log + chatSessions)
@@ -156,7 +156,7 @@ export async function main(argv) {
     process.stderr.write(`${formatSafetyError(err)}\n`);
     if (err?.code === 'EAMBIGUOUS') return 2;
     if (err?.code === 'ENOSQLITE') return 3;
-    if (process.env.TRANSCRIPT_STATS_DEBUG) process.stderr.write(`${err?.stack}\n`);
+    if (process.env.AGCHAT_DEBUG) process.stderr.write(`${err?.stack}\n`);
     return 1;
   }
 }
@@ -207,8 +207,15 @@ function applySessionFilters(sessions, opts) {
     const t = String(opts.title).toLowerCase();
     out = out.filter((s) => (s.title ?? '').toLowerCase().includes(t));
   }
+  if (opts.instance) {
+    const wanted = String(opts.instance).toLowerCase();
+    out = out.filter((s) => (s.instance ?? '').toLowerCase().includes(wanted));
+  }
   if (opts.withLog) out = out.filter((s) => s.transcriptPath);
   if (opts.orphansOnly) out = out.filter((s) => s.indexed === false);
+  // Conversations the app's own index does not list, but this tool can read.
+  if (opts.notIndexed) out = out.filter((s) => s.inIndex === false);
+  if (opts.recoverable) out = out.filter((s) => s.recoverable === true);
   return out;
 }
 
@@ -369,7 +376,7 @@ async function cmdAnalysis(command, opts, st) {
   const targets = await resolveTranscripts(opts);
   if (!targets.length) {
     process.stderr.write(
-      'No transcript found. Run `transcript-stats sessions` or pass --session/--file/--root.\n'
+      'No transcript found. Run `agchat sessions` or pass --session/--file/--root.\n'
     );
     return 1;
   }
@@ -685,6 +692,16 @@ export function parseArgs(argv) {
         break;
       case '--host':
         opts.host = pushCsv(opts.host, take(a));
+        break;
+      case '--instance':
+        opts.instance = take(a);
+        break;
+      case '--not-indexed':
+      case '--hidden':
+        opts.notIndexed = true;
+        break;
+      case '--recoverable':
+        opts.recoverable = true;
         break;
       case '--root':
       case '--dir':

@@ -2,7 +2,7 @@
  * Programmatic API.
  *
  * @example
- * import { allSessions, findSession, parseTranscript, computeStats } from 'copilot-transcript-stats';
+ * import { allSessions, findSession, parseTranscript, computeStats } from 'agent-chat-toolkit';
  *
  * const sessions = await allSessions();                  // every host, newest first
  * const one = findSession(sessions, '6f36e30a');

@@ -24,7 +24,7 @@ import { makeSandbox } from './make-sandbox.mjs';
 import { readIndex } from '../src/sqlite.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const CLI = path.join(here, '..', 'bin', 'transcript-stats.js');
+const CLI = path.join(here, '..', 'bin', 'agchat.js');
 const keep = process.argv.includes('--keep');
 
 let passed = 0;
@@ -73,12 +73,16 @@ async function dirDigest(dir) {
   return out.join('\n');
 }
 
-const tmpRoot = path.join(os.tmpdir(), `cts-sandbox-${Date.now()}`);
+const tmpRoot = path.join(os.tmpdir(), `agchat-sandbox-${Date.now()}`);
 
 process.stdout.write(`sandbox E2E\n  root: ${tmpRoot}\n\n`);
 
 const info = await makeSandbox(tmpRoot, { force: true });
-const env = { VSCODE_USER_DIR: info.userDir, GEMINI_DIR: path.join(tmpRoot, '.gemini') };
+const env = {
+  VSCODE_USER_DIR: info.userDir,
+  GEMINI_DIR: path.join(tmpRoot, '.gemini'),
+  ANTIGRAVITY_PROFILE_DIR: info.profileRoot,
+};
 const NO_LOG = path.join(tmpRoot, 'no-such-dir');
 
 process.stdout.write('discovery\n');
@@ -89,10 +93,10 @@ process.stdout.write('discovery\n');
   const vscode = inv.rows.find((x) => x.host === 'vscode');
   const ag = inv.rows.find((x) => x.host === 'antigravity');
   check('vscode host sees 2 conversations', () => assert.equal(vscode.sessionCount, 2));
-  check('antigravity host sees 1 conversation', () => assert.equal(ag.sessionCount, 1));
+  check('antigravity host sees all three instance conversations', () => assert.equal(ag.sessionCount, 4));
   check('every session has a transcript log', () => {
     assert.equal(vscode.withTranscript, 2);
-    assert.equal(ag.withTranscript, 1);
+    assert.equal(ag.withTranscript, 4);
   });
 }
 
@@ -105,7 +109,7 @@ if (!info.sqlite) {
   check('sessions --json exits 0', () => assert.equal(r.code, 0, r.err));
   const list = JSON.parse(r.out);
   check('catalog merges both hosts', () => {
-    assert.equal(list.length, 3);
+    assert.equal(list.length, 6);
     assert.deepEqual([...new Set(list.map((s) => s.host))].sort(), ['antigravity', 'vscode']);
   });
   if (info.sqlite) {
@@ -130,8 +134,75 @@ if (!info.sqlite) {
   });
 }
 
-process.stdout.write('\nsearch\n');
+process.stdout.write('\nantigravity instances and index\n');
 {
+  const r = run(['sessions', '--host', 'antigravity', '--json'], env);
+  check('antigravity sessions --json exits 0', () => assert.equal(r.code, 0, r.err));
+  const list = JSON.parse(r.out);
+  const instances = [...new Set(list.map((s) => s.instance))].sort();
+  check('app, IDE and backup instances are discovered', () =>
+    assert.deepEqual(instances, ['antigravity', 'antigravity-backup', 'antigravity-ide'])
+  );
+
+  const byId = new Map(list.map((s) => [s.id, s]));
+  check('an indexed conversation is marked inIndex', () => {
+    const s = byId.get(info.sessionAntigravity);
+    assert.equal(s.inIndex, true);
+    assert.equal(s.storeKind, 'pb');
+    assert.equal(s.title, 'Sandbox antigravity conversation');
+  });
+  check('a conversation missing from the sidebar index is marked not-indexed', () => {
+    const s = byId.get(info.sessionAgLegacy);
+    assert.equal(s.inIndex, false);
+    assert.equal(s.storeKind, 'db');
+  });
+  check('a not-indexed conversation with content is recoverable', () => {
+    assert.equal(byId.get(info.sessionAgLegacy).recoverable, true);
+  });
+  check('the IDE instance matches its own profile', () => {
+    const s = byId.get(info.sessionAgIde);
+    assert.equal(s.instance, 'antigravity-ide');
+    assert.equal(s.inIndex, true);
+    assert.ok(String(s.sidebarProfile).includes('Antigravity IDE'), s.sidebarProfile);
+  });
+  check('a snapshot instance reports visibility as unknown', () => {
+    const s = byId.get(info.sessionAgBackup);
+    assert.equal(s.instance, 'antigravity-backup');
+    assert.equal(s.inIndex, null);
+    assert.equal(s.sidebarProfile, null);
+  });
+  check('the sidebar index supplies timestamps and workspaces', () => {
+    const s = byId.get(info.sessionAntigravity);
+    assert.equal(s.updatedMs, Date.parse('2026-01-05T09:10:00Z'));
+    assert.equal(s.project, '/home/sandbox/projects/beta');
+  });
+
+  const only = run(['sessions', '--host', 'antigravity', '--not-indexed', '--json'], env);
+  check('--not-indexed filters to the unlisted conversation', () => {
+    const ids = JSON.parse(only.out).map((s) => s.id);
+    assert.deepEqual(ids, [info.sessionAgLegacy]);
+  });
+
+  const rec = run(['sessions', '--host', 'antigravity', '--recoverable', '--json'], env);
+  check('--recoverable filters to readable-but-unlisted conversations', () => {
+    const ids = JSON.parse(rec.out).map((s) => s.id);
+    assert.deepEqual(ids, [info.sessionAgLegacy]);
+  });
+
+  const inst = run(['sessions', '--host', 'antigravity', '--instance', 'backup', '--json'], env);
+  check('--instance narrows to one instance', () => {
+    const ids = JSON.parse(inst.out).map((s) => s.id);
+    assert.deepEqual(ids, [info.sessionAgBackup]);
+  });
+
+  const one = run(['show', '-s', info.sessionAgIde, '-l', '2'], env);
+  check('a conversation from the IDE instance is readable', () => {
+    assert.equal(one.code, 0, one.err);
+    assert.ok(one.out.includes('The IDE build keeps its own conversations.'));
+  });
+}
+
+process.stdout.write('\nsearch\n');{
   const hit = run(['find', '-k', 'echo sandbox', '-l', '4', '--max-results', '5', '--json'], env);
   check('find --json exits 0', () => assert.equal(hit.code, 0, hit.err));
   const results = JSON.parse(hit.out);

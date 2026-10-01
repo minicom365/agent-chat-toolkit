@@ -4,6 +4,58 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-01
+
+**Renamed** `copilot-transcript-stats` → **`agent-chat-toolkit`**, CLI
+`transcript-stats` → **`agchat`**. The old repository URL redirects on GitHub.
+
+Antigravity grew a second dimension — *instances* — and the tool learned to tell
+"on disk" from "visible in the app".
+
+### Added
+
+- **Instance discovery for Antigravity.** Every `~/.gemini/*antigravity*` directory is
+  catalogued separately: `antigravity` (app), `antigravity-ide` (IDE build),
+  `antigravity-backup` (snapshot of an older profile), `antigravity-history` (a
+  third-party extension's cache). Conversations that only exist in a backup are now
+  found instead of ignored.
+- **Sidebar index reader** (`src/hosts/antigravity-index.js`). Antigravity's
+  `antigravityUnifiedStateSync.trajectorySummaries` is base64-wrapped protobuf, not
+  encrypted; it is decoded with a generic wire-format reader to recover conversation
+  ids, titles, step counts, timestamps and workspace URIs.
+- **`src/protobuf.js`** — a minimal, read-only protobuf wire-format walker. Identifies
+  timestamps by shape, UTF-8 by decodability and identifiers by pattern, so it works
+  without a `.proto` schema and reports nothing rather than guessing.
+- **Visibility reporting.** `sessions` gained `idx` (app index: `yes`/`no`/`?`),
+  `store` (`pb` current, `db` legacy, `-` absent) and an `instance` column, plus
+  `--instance`, `--not-indexed` and `--recoverable` filters. A conversation can be
+  complete on disk and absent from the app's index — the state that looks like data
+  loss.
+- App profiles are matched to instances **by identifier overlap**, with IDE builds
+  matched only to IDE profiles; a snapshot instance reports visibility as unknown
+  rather than claiming it.
+- `HTTPS_PROXY`-free structured logging: `AGCHAT_DEBUG=1` prints stack traces.
+- `docs/ANTIGRAVITY.md` — what is plaintext, what is protobuf, where the language
+  server would actually be needed, and why it is not needed here.
+- Sandbox fixtures for two extra instances, an IDE profile and a sidebar index built
+  by a fixture-only protobuf encoder (`tools/sandbox-protobuf.mjs`).
+
+### Changed
+
+- `conversation_summaries.db` is no longer the only catalog: sidebar index, annotation
+  files and the history extension's `cache.json` are merged, with an explicit source
+  list per conversation.
+- Implausible timestamps (sentinel `0001-01-01` values) are rejected instead of being
+  reported as real dates.
+- Test counts: 65 unit specs and 58 sandbox checks (was 55 / 46).
+
+### Notes
+
+- The tool remains **read-only** for Antigravity stores. Rebuilding
+  `trajectorySummaries` would mean writing protobuf into live global state, where a
+  mistake costs every sidebar entry — a worse outcome than a missing conversation.
+  Detection plus `show`/`export` is the safe path.
+
 ## [0.2.0] - 2026-10-01
 
 The tool becomes multi-host: it now reads Antigravity conversations as well as VS Code
@@ -83,5 +135,5 @@ and inside `node:24-alpine` with `--network none`.
 - Streaming parser; zero runtime dependencies.
 - 37 `node:test` specs on synthetic transcripts with hand-computed expectations.
 
-[0.2.0]: https://github.com/minicom365/copilot-transcript-stats/releases/tag/v0.2.0
-[0.1.0]: https://github.com/minicom365/copilot-transcript-stats/releases/tag/v0.1.0
+[0.2.0]: https://github.com/minicom365/agent-chat-toolkit/releases/tag/v0.2.0
+[0.1.0]: https://github.com/minicom365/agent-chat-toolkit/releases/tag/v0.1.0

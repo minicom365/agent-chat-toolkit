@@ -416,33 +416,37 @@ export function renderHosts(inventory, { styler: st }) {
 export function renderSessions(sessions, { styler: st, limit = 60, total = null }) {
   if (!sessions.length) return 'No conversations found.';
   const shown = sessions.slice(0, limit);
+  const idxMark = (s) => (s.inIndex === true ? st.green('yes') : s.inIndex === false ? st.red('no') : st.gray('?'));
   const rows = shown.map((s, n) => [
     String(n + 1),
     s.host,
+    s.instance ?? '',
     s.updatedMs ? localStamp(s.updatedMs) : '-',
+    idxMark(s),
+    s.storeKind ?? st.gray('-'),
     s.indexed === false ? st.yellow('orphan') : '',
-    truncate(s.title ?? '', 44),
-    truncate(s.project ?? '', 40),
+    truncate(s.title ?? '', 40),
+    truncate(s.project ?? '', 34),
     s.id.slice(0, 8),
     s.transcriptPath ? '' : st.gray('no-log'),
     fmtBytes(s.sizeBytes ?? 0),
   ]);
   const out = [
-    h(st, `Conversations (${shown.length}${total != null && total > shown.length ? ` of ${total}` : ''})`),
+    h(
+      st,
+      `Conversations (${shown.length}${total != null && total > shown.length ? ` of ${total}` : ''})`
+    ),
     '',
-    table(['#', 'host', 'updated', 'index', 'title', 'project', 'session', 'log', 'size'], rows, [
-      'right',
-      'left',
-      'left',
-      'left',
-      'left',
-      'left',
-      'left',
-      'left',
-      'right',
-    ]),
+    table(
+      ['#', 'host', 'instance', 'updated', 'idx', 'store', 'index', 'title', 'project', 'session', 'log', 'size'],
+      rows,
+      ['right', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'right']
+    ),
     '',
-    st.gray('  session = id prefix, usable with `show`, `find --id`, or `stats --session`.'),
+    st.gray('  idx   = listed in the app own conversation index (yes/no/? = unknown)'),
+    st.gray('  store = per-conversation store: pb (current) | db (legacy) | - (absent)'),
+    st.gray('  log   = this tool found a readable transcript for it'),
+    st.gray('  session id prefix works with `show`, `stats --session`, `move`.'),
   ];
   if (sessions.length > shown.length) {
     out.push(st.gray(`  … ${sessions.length - shown.length} more; raise --limit.`));

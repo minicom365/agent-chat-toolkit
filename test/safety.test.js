@@ -9,7 +9,7 @@ import { SafetyError, assertSafeWriteTarget, backupFile } from '../src/safety.js
 import { userDataDirs } from '../src/discover.js';
 
 async function tmpdir(label) {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), `cts-${label}-`));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), `agchat-${label}-`));
   return dir;
 }
 
@@ -91,7 +91,7 @@ test('a sandbox location passes the guard untouched', async () => {
 
 test('the guard checks OS defaults, not a sandbox override', () => {
   const previous = process.env.VSCODE_USER_DIR;
-  process.env.VSCODE_USER_DIR = path.join(os.tmpdir(), 'cts-override');
+  process.env.VSCODE_USER_DIR = path.join(os.tmpdir(), 'agchat-override');
   try {
     // discovery honours the override...
     assert.deepEqual(userDataDirs(), [process.env.VSCODE_USER_DIR]);

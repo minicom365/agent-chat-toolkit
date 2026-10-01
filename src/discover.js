@@ -38,7 +38,7 @@ export function userDataDirs(opts = {}) {
   const home = os.homedir();
   const dirs = [];
   // An explicit VSCODE_USER_DIR *replaces* the product list rather than adding
-  // to it, so `VSCODE_USER_DIR=<sandbox> transcript-stats hosts` sees only the
+  // to it, so `VSCODE_USER_DIR=<sandbox> agchat hosts` sees only the
   // sandbox. This is what makes the sandbox verification meaningful.
   if (useEnv && process.env.VSCODE_USER_DIR) return [process.env.VSCODE_USER_DIR];
 

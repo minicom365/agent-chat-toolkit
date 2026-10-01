@@ -1,4 +1,4 @@
-# copilot-transcript-stats
+# agent-chat-toolkit
 
 **Zero-dependency CLI to analyse and navigate the agent conversations your editor keeps on disk — VS Code Copilot Chat and Antigravity.**
 
@@ -15,14 +15,21 @@ questions that actually matter:
 - Where is that conversation from last month, and how do I get it back?
 
 ```
-$ transcript-stats sessions --limit 6
+$ agchat sessions --limit 6
 
- #  host         updated              index   title                          project                session   log       size
---  -----------  -------------------  ------  -----------------------------  ---------------------  --------  --------  ------
- 1  vscode       2026-10-01 09:12:41          Refactoring the media pipeline  /home/me/projects/app  7132da86            65.8MB
- 2  antigravity  2026-09-28 15:43:17          Sandbox antigravity session     /home/me/projects/app  6f36e30a            155.8KB
- 3  vscode       2026-09-28 16:49:46  orphan  (unindexed chat)               /home/me/projects/app  bdc5fad2  no-log      1.9KB
+ #  host         instance            updated              idx  store  index   title                          project                session   log       size
+--  -----------  ------------------  -------------------  ---  -----  ------  -----------------------------  ---------------------  --------  --------  ------
+ 1  vscode                            2026-10-01 09:12:41  ?    -             Refactoring the media pipeline  /home/me/projects/app  7132da86            65.8MB
+ 2  antigravity  antigravity         2026-09-28 15:43:17  yes  pb            Fixed the printer default      /home/me/projects/app  6f36e30a            155.8KB
+ 3  antigravity  antigravity         2026-09-20 11:04:52  no   db            Legacy conversation            /home/me/projects/app  c2d4ded1            581.5KB
+ 4  antigravity  antigravity-ide     2026-09-21 12:48:32  yes  pb            IDE build conversation         /home/me/projects/app  5f124878            780.1KB
+ 5  antigravity  antigravity-backup  2026-08-30 02:11:07  ?    pb            Snapshot of an older profile   /home/me/projects/app  9b3f21aa            1.2MB
+ 6  vscode                            2026-09-28 16:49:46  ?    -     orphan  (unindexed chat)               /home/me/projects/app  bdc5fad2  no-log      1.9KB
 ```
+
+`idx` is whether the app's own index lists the conversation. Row 3 is on disk,
+readable, and **not** in the sidebar — exactly the state that makes a conversation
+look lost. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 
 ---
 
@@ -30,7 +37,7 @@ $ transcript-stats sessions --limit 6
 
 | command | purpose |
 | --- | --- |
-| **`sessions`** | one catalog across every host, workspace and profile — including conversations the editor has "forgotten" |
+| **`sessions`** | one catalog across every host, instance, workspace and profile — including conversations the editor has "forgotten" |
 | **`find`** | keyword search with four detail levels, so tool noise never buries the decision you are looking for |
 | **`show`** | replay one conversation at the level of detail you need |
 | **`move`** | migrate a VS Code conversation into another workspace's storage, with backups and a dry-run default |
@@ -97,37 +104,46 @@ workspace. `sessions` marks those as `orphan`, and `move` is the repair.
 Requires **Node.js 18+**. There are no runtime dependencies.
 
 ```bash
-git clone https://github.com/minicom365/copilot-transcript-stats.git
-cd copilot-transcript-stats
-npm link          # optional: makes `transcript-stats` available on PATH
+git clone https://github.com/minicom365/agent-chat-toolkit.git
+cd agent-chat-toolkit
+npm link          # optional: makes `agchat` available on PATH
 ```
 
 ```bash
-node bin/transcript-stats.js hosts           # what did it find on this machine?
-node bin/transcript-stats.js sessions        # list every conversation, newest first
-node bin/transcript-stats.js stats --latest  # analyse the most recent one
+node bin/agchat.js hosts           # what did it find on this machine?
+node bin/agchat.js sessions        # list every conversation, newest first
+node bin/agchat.js stats --latest  # analyse the most recent one
 ```
 
-## Hosts
+## Hosts and instances
 
 | host | where the conversations live |
 | --- | --- |
 | `vscode` | `<User>/workspaceStorage/<hash>/` — `chatSessions/*.jsonl`, `GitHub.copilot-chat/transcripts/*.jsonl`, `state.vscdb` index |
-| `antigravity` | `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript*.jsonl` + `conversation_summaries.db` |
+| `antigravity` | `~/.gemini/<instance>/brain/<id>/.system_generated/logs/transcript*.jsonl` + `conversation_summaries.db` |
+
+An **instance** is one install or snapshot of a host. Antigravity keeps several:
+`antigravity` (the app), `antigravity-ide` (the IDE build), `antigravity-backup`
+(a snapshot of an older profile) and `antigravity-history` (a third-party cache).
+They are discovered generically as `~/.gemini/*antigravity*` and catalogued
+separately, so conversations that only exist in a backup are still found.
 
 See [docs/HOSTS.md](docs/HOSTS.md) for the full layout of both, including the SQLite
-schemas and the pitfalls that make naive parsing wrong.
+schemas and the pitfalls that make naive parsing wrong, and
+[docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md) for what is plaintext, what is protobuf,
+and why the language server is not needed.
 
 Product directories searched for VS Code: `Code`, `Code - Insiders`, `VSCodium`,
 `Cursor`, `Windsurf`, `Trae`, `Code - OSS`, `Code - Exploration` — on Windows, macOS
-and Linux. Override with `VSCODE_USER_DIR` / `GEMINI_DIR`, or `--root <dir>`.
+and Linux. Override with `VSCODE_USER_DIR` / `GEMINI_DIR` /
+`ANTIGRAVITY_PROFILE_DIR`, or `--root <dir>`.
 
 ## Commands
 
 | command | what it prints |
 | --- | --- |
 | `hosts` | detected hosts, data roots, conversation counts, total size |
-| `sessions` (alias `list`) | every conversation across hosts: title, project, id, size, orphan state |
+| `sessions` (alias `list`) | every conversation across hosts and instances: title, project, id, size, index state |
 | `find` | keyword search across conversations, at detail level 1–4 |
 | `show` | one conversation (`-s <id>`) at a detail level |
 | `move` | copy a VS Code conversation into another workspace storage (dry run by default) |
@@ -153,9 +169,9 @@ and Linux. Override with `VSCODE_USER_DIR` / `GEMINI_DIR`, or `--root <dir>`.
 Search is level-aware: a level-2 search can never be buried by a tool log.
 
 ```bash
-transcript-stats find -k "migration" -l 2 --max-results 5
-transcript-stats find -k "ETIMEDOUT" -l 4 --grep-scope output
-transcript-stats show -s 6f36e30a -l 3 > conversation.md
+agchat find -k "migration" -l 2 --max-results 5
+agchat find -k "ETIMEDOUT" -l 4 --grep-scope output
+agchat show -s 6f36e30a -l 3 > conversation.md
 ```
 
 ### Selecting a conversation
@@ -166,6 +182,9 @@ transcript-stats show -s 6f36e30a -l 3 > conversation.md
     --latest                      most recent transcript across hosts (default)
     --all                         aggregate every discovered transcript
     --host <vscode|antigravity>   restrict to one host (repeatable)
+    --instance <name>             restrict to one instance (e.g. backup, ide)
+    --not-indexed                 data on disk but not listed by the app's index
+    --recoverable                 ... and readable here (has a transcript)
     --root <dir>                  extra data dir to search (repeatable)
 ```
 
@@ -206,10 +225,10 @@ different window. It is built to be impossible to run by accident:
 
 ```bash
 # 1. see what would happen (nothing is written)
-transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User
+agchat move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User
 
 # 2. do it (only after the editor is closed)
-transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User --apply
+agchat move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User --apply
 ```
 
 - `--data-dir` is **required** — there is no implicit target.
@@ -233,8 +252,8 @@ checks never touch a live profile:
 npm run verify                 # unit suite + sandbox E2E on the host
 npm run sandbox                # sandbox E2E only (generates a temp tree and removes it)
 
-docker build -f Dockerfile.verify -t transcript-stats-verify .
-docker run --rm --network none transcript-stats-verify
+docker build -f Dockerfile.verify -t agchat-verify .
+docker run --rm --network none agchat-verify
 ```
 
 The sandbox generates fake VS Code storages (including `state.vscdb` and an orphaned
@@ -275,7 +294,7 @@ gap-based number can be cross-checked.
 ## Library API
 
 ```js
-import { allSessions, parseTranscript, computeStats, findSession } from 'copilot-transcript-stats';
+import { allSessions, parseTranscript, computeStats, findSession } from 'agent-chat-toolkit';
 
 const sessions = await allSessions();                     // both hosts
 const one = findSession(sessions, '6f36e30a');
@@ -305,7 +324,7 @@ format.
 ## Development
 
 ```bash
-npm run verify     # 55 unit specs + 46 sandbox checks
+npm run verify     # 65 unit specs + 58 sandbox checks
 ```
 
 The unit tests are built on fully synthetic transcripts with hand-computed

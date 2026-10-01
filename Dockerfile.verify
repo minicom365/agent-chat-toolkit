@@ -4,8 +4,8 @@
 # container, on a Node version that is not the developer's. Nothing is mounted
 # from the host, so no editor profile can be reached even by accident:
 #
-#   docker build -f Dockerfile.verify -t transcript-stats-verify .
-#   docker run --rm transcript-stats-verify
+#   docker build -f Dockerfile.verify -t agchat-verify .
+#   docker run --rm agchat-verify
 #
 # The project has no runtime dependencies, so the build needs no npm install.
 FROM node:24-alpine
@@ -23,6 +23,6 @@ COPY docs ./docs
 COPY README.md README.ko.md LICENSE ./
 
 # Fail the image build if the tool cannot even report its own version.
-RUN node --version && node bin/transcript-stats.js --version
+RUN node --version && node bin/agchat.js --version
 
 CMD ["sh", "-lc", "npm test && node tools/sandbox-e2e.mjs"]
