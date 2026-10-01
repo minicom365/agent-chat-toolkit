@@ -454,9 +454,11 @@ export function renderSessions(sessions, { styler: st, limit = 60, total = null 
   if (!sessions.length) return 'No conversations found.';
   const shown = sessions.slice(0, limit);
   const idxMark = (s) => (s.inIndex === true ? st.green('yes') : s.inIndex === false ? st.red('no') : st.gray('?'));
-  // `head` flags a conversation whose content transcript lost its head: the early
-  // steps survive only as an overview skeleton, so text totals are partial.
+  // `head` flags how complete the readable content is. `locked` is the severe
+  // case: the conversation is there, but only inside the encrypted `.pb` store,
+  // which no key on the machine opens.
   const headMark = (s) => {
+    if (s.locked) return st.red('lock');
     if (!s.transcriptPath) return st.gray('-');
     if (s.unrecoverableHeadSteps > 0) return st.red('lost');
     if (s.headLostSteps > 0) return st.yellow('skel');
@@ -490,9 +492,9 @@ export function renderSessions(sessions, { styler: st, limit = 60, total = null 
     ),
     '',
     st.gray('  idx   = listed in the app own conversation index (yes/no/? = unknown)'),
-    st.gray('  store = per-conversation store: pb (current) | db (legacy) | - (absent)'),
-    st.gray('  head  = content log completeness: full | skel (head is skeleton only) |'),
-    st.gray('          lost (head is missing from every log) | -'),
+    st.gray('  store = per-conversation store: pb (encrypted, older) | db (plaintext, newer) | -'),
+    st.gray('  head  = readable content: full | skel (head is skeleton only) |'),
+    st.gray('          lost (head missing from every log) | lock (only in the encrypted pb) | -'),
     st.gray('  log   = this tool found a readable transcript for it'),
     st.gray('  session id prefix works with `show`, `stats --session`, `move`.'),
   ];

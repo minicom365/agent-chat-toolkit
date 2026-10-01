@@ -165,11 +165,16 @@ cannot steal the next one.
    (`conversation_summaries.db`, `annotations/<id>.pbtxt`).
 7. **`transcript_full.jsonl` is a superset of `transcript.jsonl`, but not of the
    conversation.** It can start part-way through (see "Merging the logs"), and the
-   catalog can also reference conversations whose log is absent entirely. Check
-   `head` in `sessions` or the coverage block in `stats` before quoting a total.
+   catalog can also reference conversations whose log is absent entirely — 207 of
+   294 on the measured install. Check `head` in `sessions` or the coverage block in
+   `stats` before quoting a total.
 8. **`CLEARED` means the text was dropped.** The step still exists — type, timestamp
    and `tool_calls` survive — which is why a truncated conversation can still be
    read as a timeline.
+9. **The `.pb` store is encrypted, the `.db` store is not.** `.pb` is the older
+   generation (to ~2026-08-13) and needs a key that is not on disk; `.db` is the
+   newer one and is plain SQLite with plain protobuf blobs. `sessions` shows `lock`
+   when a conversation exists only in the former.
 
 ---
 

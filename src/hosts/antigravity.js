@@ -542,6 +542,14 @@ export async function listSessions({ roots = null, limit = 0, profileRoots = nul
         inIndex: sidebarIds ? sidebarIds.has(id) : null,
         /** per-conversation store: the current protobuf `.pb` or the older `.db` */
         storeKind,
+        /** what that store means for recoverability */
+        storeNote: storeKindNote(storeKind),
+        /**
+         * The conversation exists but its content is only in the encrypted store:
+         * no readable log, and a `.pb` store no key on this machine can open.
+         * This is the state that is genuinely unrecoverable offline.
+         */
+        locked: Boolean(!transcript && storeKind === 'pb'),
         /** readable here (a transcript log exists) but not listed by the app */
         recoverable: Boolean(transcript) && (sidebarIds ? !sidebarIds.has(id) : false),
         sidebarProfile: matched?.profile.dir ?? null,
@@ -559,14 +567,33 @@ export async function listSessions({ roots = null, limit = 0, profileRoots = nul
 }
 
 /**
- * The per-conversation store: current builds write `<id>.pb` (protobuf), older
- * ones wrote `<id>.db` (SQLite). Which one is present correlates strongly with
- * whether the app still lists the conversation, so it is worth reporting.
+ * The per-conversation store. Two generations exist, and the *newer* one is the
+ * readable one:
+ *
+ *   `<id>.pb`  encrypted protobuf. Measured across a full install: entropy 8.000
+ *              bits/byte, no container or compression magic, no key on disk.
+ *              Written by `jetski/cortex/proto_saver.DiskSaver` when its
+ *              `WithEncryptionKey` option is set. Dated 2025-11 … 2026-08-13.
+ *
+ *   `<id>.db`  plain SQLite whose blob columns are ordinary protobuf — no key
+ *              needed. Dated 2026-08-03 … onwards, i.e. the app *dropped*
+ *              encryption at that cutover. A conversation never appears in both
+ *              formats.
+ *
+ * The kind is worth reporting because it decides whether a conversation with no
+ * readable log can be recovered at all: a `.pb` one cannot, a `.db` one can.
  */
 async function detectStoreKind(conversationsDir, id) {
   if (await statOrNull(path.join(conversationsDir, `${id}.pb`))) return 'pb';
   if (await statOrNull(path.join(conversationsDir, `${id}.db`))) return 'db';
   return null;
+}
+
+/** Why a store kind matters, in one short phrase (used by the report). */
+export function storeKindNote(kind) {
+  if (kind === 'pb') return 'encrypted protobuf (older generation) - not readable offline';
+  if (kind === 'db') return 'plaintext SQLite + protobuf blobs (newer generation) - readable';
+  return 'no per-conversation store';
 }
 
 function rowId(row) {

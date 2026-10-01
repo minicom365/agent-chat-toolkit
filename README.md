@@ -50,6 +50,12 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 > The remaining text is in `conversations/<id>.pb`, which is **encrypted** (entropy
 > 8.000 bits/byte) and not readable offline. Treat any total from a `skel`/`lost`
 > conversation as a lower bound.
+>
+> The store has two generations and the **newer** one is the readable one: `.pb`
+> is encrypted (2025-11 … 2026-08-13) while `.db` is plain SQLite whose blobs are
+> ordinary protobuf (2026-08-03 onward). One real install holds **294 `.pb`
+> conversations, 207 of which have no log at all** — for those, the only copy is
+> the ciphertext, and `agchat sessions` marks them `lock`.
 
 ---
 

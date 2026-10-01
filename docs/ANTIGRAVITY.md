@@ -6,12 +6,14 @@ records what is actually on disk, what this tool reads, and where the real
 limitation is.
 
 **Short version: the conversation *text* is plaintext JSONL, but no single file
-holds a whole long conversation, and the one store that claims to is genuinely
-encrypted.** The catalog is plain SQLite and the sidebar index is base64-wrapped
-protobuf. `conversations/<id>.pb` is real ciphertext and cannot be read offline.
+holds a whole long conversation, and the store that does may be encrypted.** The
+catalog is plain SQLite and the sidebar index is base64-wrapped protobuf. Of the
+two per-conversation stores, the **older** `<id>.pb` is real ciphertext no
+offline key opens, while the **newer** `<id>.db` is plain SQLite — the direction
+of that change is the opposite of what a first look suggests.
 
-Three separate things have to be handled, and an earlier revision of this
-document got two of them wrong:
+Four separate things have to be handled, and earlier revisions of this document
+got two of them wrong:
 
 1. **`transcript_full.jsonl` can lose the head of a long session.** Measured on a
    real 9,308-step conversation, the log started at step **7,231** — 78% of the
@@ -21,6 +23,9 @@ document got two of them wrong:
 3. **`conversations/<id>.pb` is encrypted**, not merely schema-less. Its entropy
    is 8.000 bits/byte across the whole file, it has no compression or container
    magic, and no key on the machine decrypts it.
+4. **`conversations/<id>.db` is plaintext.** It is the *newer* generation (the
+   app stopped encrypting around 2026-08-14), and 207 older `.pb` conversations
+   have no log at all, so they are locked in the encrypted store for good.
 
 ---
 
@@ -50,7 +55,51 @@ document got two of them wrong:
 | `annotations/<id>.pbtxt` | text protobuf | **yes** |
 | `state.vscdb` → `trajectorySummaries` | base64 of a protobuf message | **yes** (see below) |
 | `conversations/<id>.pb` | **AES ciphertext** | **no** |
-| `conversations/<id>.db` | SQLite, protobuf-encoded blobs | no (schema problem) |
+| `conversations/<id>.db` | SQLite; blob columns are **plain protobuf** | **yes** — walk the wire format |
+
+## Two store generations, and the newer one is the readable one
+
+This is the detail most likely to be got backwards, so it is worth stating with
+the measurement that settles it. Across one full install (350 stores):
+
+| generation | file | date range | head 64 KB entropy | verdict |
+| --- | --- | --- | --- | --- |
+| older | `<id>.pb` | 2025-11 … 2026-08-13 | 8.00 (all 294) | **encrypted** |
+| newer | `<id>.db` | 2026-08-03 … onwards | 3.1 – 5.1 (all 56) | **plaintext** |
+
+The cutover was around **2026-08-14**, and it went *from* encryption *to*
+plaintext. No conversation appears in both formats, so old conversations stay
+`.pb` for good.
+
+`.db` blobs are ordinary protobuf and need no key at all — a schema-less walk
+recovers real text. From a 3.9 MB store, 727,068 characters came back, including
+tool arguments, file paths, code and Korean prose:
+
+```
+AbsolutePath  C:\Users\ms338\.gemini\antigravity\brain\0e3fc1fe…\scratch\repo\.agents\skills\video\SKILL.md
+CommandLine   current = "c:\Users\ms338\Nextcloud2\전남대\3학년\2학기\ai 특강 실습\Obsidian-template-main"
+```
+
+Reading `.db` is nevertheless **not** worth doing for its own sake: for 50 of the
+56 stores the merged logs already cover exactly the same steps (`store steps ==
+log max + 1`), and in 6 cases the store holds only two steps more. It is a
+useful fallback if the `brain/` logs are ever lost, not a source of new content.
+
+What the generation split *does* decide is whether a conversation can be read at
+all. Measured over all 350 conversations:
+
+| | conversations | no log at all | recoverable |
+| --- | --- | --- | --- |
+| `.pb` | 294 | **207** | only where a log survives |
+| `.db` | 56 | 0 | always |
+
+**207 conversations exist only as encrypted `.pb`.** For those, no transcript,
+no overview, and no offline key — `agchat sessions` marks them `lock` in the
+`head` column precisely so this is visible rather than silently absent.
+
+Six further `.pb` files (3 conversations, duplicated across two instances) are
+27–48 MB of **all zero bytes**: allocated but never written, i.e. content that
+was lost rather than encrypted.
 
 ## The logs overlap: merge, do not pick one
 
@@ -68,9 +117,10 @@ steps with text  1,342 (from step 6,380)
 
 The early steps come back as *skeleton*: you get the type, timestamp and — for
 the 248 steps that recorded a `tool_calls` field — which tool was invoked, but
-not the prose. `agchat sessions` marks these conversations `skel` in the `head`
-column, `lost` when no log covers the head at all, and `full` when the content
-transcript is complete.
+not the prose. `agchat sessions` marks these conversations in the `head` column:
+`full` when the content transcript is complete, `skel` when the head survives
+only as a cleared skeleton, `lost` when no log covers the head at all, and
+`lock` when the content exists *only* inside the encrypted `.pb` store.
 
 `overview.txt` uses the *same* JSONL schema as the transcript. A step whose text
 was dropped carries `"status": "CLEARED"` and no `content`; a merged parse can
@@ -126,20 +176,29 @@ conversation with a `skel`/`lost` head is a **lower bound** on that conversation
 and `agchat stats` says so in its warnings rather than presenting a partial total
 as the whole story.
 
-## Where the schema problem still applies
+## Exporting a `lock`ed conversation
 
-`conversations/<id>.db` (older builds) holds the conversation in an unpublished
-protobuf schema inside SQLite blobs. Reading it without the language server would
-require reverse-engineering that schema, and a schema you have guessed is a schema
-you will silently misread.
+For the 207 conversations whose content is only in a `.pb` store there are two
+routes, and only two:
 
-The `.pb`/`.db` file is therefore only consulted to report which store a
-conversation uses, because that correlates with visibility:
+1. **The app's own reader.** Open the conversation in Antigravity; its language
+   server decrypts on demand. A tool that needs these bytes should drive that
+   server (`jetski/language_server` speaks protobuf envelopes over a WebSocket),
+   not the filesystem.
+2. **`overview.txt`, when it exists.** That is the skeleton path `agchat` already
+   merges, listed above.
 
-| store | listed in the sidebar index | typical |
-| --- | --- | --- |
-| `.pb` | yes | current conversations |
-| `.db` | **no** | conversations written by an older build |
+The writer is identifiable in the shipped binary, which is what makes the scheme
+versioned rather than merely unknown:
+
+```
+google3/third_party/jetski/cortex/proto_saver/proto_saver.WithEncryptionKey[…]
+google3/third_party/jetski/cortex/proto_saver/proto_saver.(*DiskSaver[…]).hasEncryption
+google3/third_party/jetski/cortex/proto_saver/disk_saver.go
+```
+
+Encryption is an **option** on `DiskSaver`, so a build that omits it writes a
+plain `.pb` — which is presumably how the `.db` generation came about.
 
 ## Instances
 

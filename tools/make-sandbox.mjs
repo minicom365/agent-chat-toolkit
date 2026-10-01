@@ -76,6 +76,17 @@ const AG_TRUNCATED = {
 };
 const AG_TRUNCATED_HEAD_STEPS = 4;
 
+/**
+ * A conversation present only as an encrypted `.pb` store: no brain directory,
+ * no transcript, no overview. This is the state that cannot be recovered
+ * offline, and it must not be silently indistinguishable from an empty one.
+ */
+const AG_LOCKED = {
+  id: '88888888-8888-4888-8888-888888888888',
+  title: 'Sandbox encrypted-only conversation',
+  workspace: 'file:///home/sandbox/projects/zeta',
+};
+
 const STORAGE_A = 'aaaaaaaa11111111';
 const STORAGE_B = 'bbbbbbbb22222222';
 
@@ -434,6 +445,9 @@ export async function makeSandbox(outDir, { force = false } = {}) {
   await fsp.writeFile(path.join(truncLogs, 'transcript_full.jsonl'), truncated.transcript);
   await fsp.writeFile(path.join(agDir, 'conversations', `${AG_TRUNCATED.id}.pb`), 'sandbox-truncated-store\n');
 
+  // --- fourth conversation: encrypted store only, nothing readable anywhere ---
+  await fsp.writeFile(path.join(agDir, 'conversations', `${AG_LOCKED.id}.pb`), 'sandbox-encrypted-only-store\n');
+
   const wroteDb = antigravitySummaryDb(path.join(agDir, 'conversation_summaries.db'), [
     [
       ANTIGRAVITY.id,
@@ -469,6 +483,18 @@ export async function makeSandbox(outDir, { force = false } = {}) {
       'CASCADE_RUN_STATUS_IDLE',
       'antigravity',
       '2026-01-03 09:00:00.0000000+00:00',
+      0,
+    ],
+    [
+      AG_LOCKED.id,
+      AG_LOCKED.title,
+      'This conversation exists only as an encrypted store.',
+      12,
+      '2026-01-02 09:04:00.0000000+00:00',
+      JSON.stringify([AG_LOCKED.workspace]),
+      'CASCADE_RUN_STATUS_IDLE',
+      'antigravity',
+      '2026-01-02 09:00:00.0000000+00:00',
       0,
     ],
   ]);
@@ -518,7 +544,7 @@ export async function makeSandbox(outDir, { force = false } = {}) {
   // --- app profiles: the state that decides what the sidebar shows ---
   const profileRoot = path.join(root, 'profiles');
   const profiles = [
-    { product: 'Antigravity', ids: [ANTIGRAVITY.id, AG_TRUNCATED.id] },
+    { product: 'Antigravity', ids: [ANTIGRAVITY.id, AG_TRUNCATED.id, AG_LOCKED.id] },
     { product: 'Antigravity IDE', ids: [AG_IDE.id] },
   ];
   if (sqliteAvailable()) {
@@ -530,7 +556,7 @@ export async function makeSandbox(outDir, { force = false } = {}) {
       db.close();
       const payload = buildSidebarIndex(
         p.ids.map((id, n) => {
-          const meta = [ANTIGRAVITY, AG_LEGACY, AG_IDE, AG_BACKUP, AG_TRUNCATED].find((x) => x.id === id) ?? {};
+          const meta = [ANTIGRAVITY, AG_LEGACY, AG_IDE, AG_BACKUP, AG_TRUNCATED, AG_LOCKED].find((x) => x.id === id) ?? {};
           return {
             id,
             title: meta.title,
@@ -564,6 +590,7 @@ export async function makeSandbox(outDir, { force = false } = {}) {
     sessionAgBackup: AG_BACKUP.id,
     sessionAgTruncated: AG_TRUNCATED.id,
     agTruncatedHeadSteps: AG_TRUNCATED_HEAD_STEPS,
+    sessionAgLocked: AG_LOCKED.id,
     sqlite: sqliteAvailable(),
     antigravityCatalog: wroteDb,
   };

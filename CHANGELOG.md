@@ -4,6 +4,53 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-01
+
+A follow-up investigation of the two external references turned up one fact that
+v0.3.1 had **backwards**, and one number that changes what the tool should say.
+
+### Fixed
+
+- **The store generations were inverted.** v0.3.1 described `.db` as the legacy
+  format and `.pb` as current. Measured across 350 stores on one install it is the
+  reverse: `.pb` (2025-11 … 2026-08-13) is always entropy 8.00 = encrypted, while
+  `.db` (2026-08-03 onward) is always entropy 3.1–5.1 = **plaintext SQLite whose
+  blob columns are ordinary protobuf**. The app stopped encrypting around
+  **2026-08-14**, and no conversation exists in both formats.
+- `sessions` now prints `store = pb (encrypted, older) | db (plaintext, newer)`.
+
+### Added
+
+- **`lock` in the `head` column.** A conversation whose content exists *only* in
+  the encrypted `.pb` store is now marked explicitly. On the measured install that
+  is **207 of 294 `.pb` conversations** — they have no transcript and no overview,
+  so nothing about them is recoverable offline. Previously they rendered as a bare
+  `-`, indistinguishable from an empty conversation.
+- `storeNote` on each session record describing what its store kind implies.
+
+### Investigated, with the result recorded rather than shipped
+
+- **Encryption is an option, not a constant.** The shipped language server
+  contains `jetski/cortex/proto_saver.WithEncryptionKey` and
+  `DiskSaver.hasEncryption` (source: `proto_saver/disk_saver.go`), which is why a
+  later build could write plaintext. This also explains the versioned scheme:
+  `decryptV4` / `decryptV5` exist as separate symbols.
+- **`.db` is not worth reading as a separate source.** For 50 of the 56 stores the
+  merged logs already cover the identical step range, and the other 6 add two
+  steps each. It is documented as a fallback, not implemented.
+- **Compression was re-checked and ruled out**, because entropy 8.0 rules out a
+  plaintext header but *not* a magic-less codec: raw deflate, zlib, gzip and
+  brotli all fail at every header offset, and the file's zero-byte density matches
+  random data (34/8603 ≈ 1/256).
+- **Three `.pb` files (3 conversations, duplicated across two instances, 27–48 MB)
+  are entirely zero bytes** — allocated but never written, so those were lost
+  rather than encrypted.
+- **Every offline key location was re-checked and is still empty**: the
+  Electron/Chromium master key authenticates the `v10` secrets in `state.vscdb`
+  but decrypts no `.pb`; every `v10` value in both profiles was decrypted and the
+  only one is a GitHub OAuth token; Windows Credential Manager holds just
+  `gemini:antigravity` (OAuth); `app.asar` contains no crypto at all.
+
 ## [0.3.1] - 2026-10-02
 
 Everything in this release comes from one correction: **`transcript_full.jsonl` is

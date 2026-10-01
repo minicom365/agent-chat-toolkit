@@ -93,7 +93,7 @@ process.stdout.write('discovery\n');
   const vscode = inv.rows.find((x) => x.host === 'vscode');
   const ag = inv.rows.find((x) => x.host === 'antigravity');
   check('vscode host sees 2 conversations', () => assert.equal(vscode.sessionCount, 2));
-  check('antigravity host sees every instance conversation', () => assert.equal(ag.sessionCount, 5));
+  check('antigravity host sees every instance conversation', () => assert.equal(ag.sessionCount, 6));
   check('every session has a transcript log', () => {
     assert.equal(vscode.withTranscript, 2);
     assert.equal(ag.withTranscript, 5);
@@ -109,7 +109,7 @@ if (!info.sqlite) {
   check('sessions --json exits 0', () => assert.equal(r.code, 0, r.err));
   const list = JSON.parse(r.out);
   check('catalog merges both hosts', () => {
-    assert.equal(list.length, 7);
+    assert.equal(list.length, 8);
     assert.deepEqual([...new Set(list.map((s) => s.host))].sort(), ['antigravity', 'vscode']);
   });
   if (info.sqlite) {
@@ -259,6 +259,33 @@ process.stdout.write('\ntruncated conversation: head recovery\n');
 
   const early = run(['query', '-s', info.sessionAgTruncated, '--role', 'tool', '--host', 'antigravity'], env);
   check('early tool calls are readable through the merge', () => assert.equal(early.code, 0, early.err));
+}
+
+process.stdout.write('\nencrypted-only conversation\n');
+{
+  const r = run(['sessions', '--host', 'antigravity', '--json'], env);
+  check('encrypted-only session list exits 0', () => assert.equal(r.code, 0, r.err));
+  const s = JSON.parse(r.out).find((x) => x.id === info.sessionAgLocked);
+  check('a store-only conversation is discovered', () => assert.ok(s, 'it should be listed'));
+  check('it is flagged as locked', () => {
+    assert.equal(s.locked, true, 'content exists only inside the encrypted store');
+    assert.equal(s.storeKind, 'pb');
+    assert.equal(s.transcriptPath, null);
+  });
+  check('its store note explains the state', () => {
+    assert.ok(/encrypted/i.test(s.storeNote), s.storeNote);
+  });
+  check('the store column distinguishes the two generations', () => {
+    const truncated = JSON.parse(r.out).find((x) => x.id === info.sessionAgTruncated);
+    assert.equal(truncated.locked, false, 'a conversation with logs is not locked');
+  });
+
+  const list = run(['sessions', '--host', 'antigravity', '--limit', '20'], env);
+  check('the session list shows the lock marker and its legend', () => {
+    assert.equal(list.code, 0, list.err);
+    assert.ok(list.out.includes('lock'), list.out);
+    assert.ok(list.out.includes('encrypted'), 'the legend names the encrypted store');
+  });
 }
 
 process.stdout.write('\nsearch\n');{
