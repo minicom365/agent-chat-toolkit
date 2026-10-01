@@ -307,6 +307,72 @@ export async function statOrNull(p) {
 }
 
 /**
+ * Count what a workspace storage folder actually holds.
+ *
+ * Used to tell "orphaned but empty" (safe to ignore) from "orphaned and holding
+ * conversations" (worth consolidating). Only the two conversation directories are
+ * counted; the storage's own `state.vscdb` is reported separately because it is
+ * mostly editor state, not chat data.
+ */
+export async function storageSummary(store) {
+  const out = { stateFiles: 0, transcriptFiles: 0, files: 0, bytes: 0, newestMs: 0 };
+  for (const [dir, key] of [
+    [path.join(store.dir, CHAT_SESSIONS), 'stateFiles'],
+    [path.join(store.dir, COPILOT_TRANSCRIPTS), 'transcriptFiles'],
+  ]) {
+    let names = [];
+    try {
+      names = await fsp.readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const n of names) {
+      if (!n.endsWith('.jsonl')) continue;
+      const stat = await statOrNull(path.join(dir, n));
+      if (!stat) continue;
+      out[key] += 1;
+      out.files += 1;
+      out.bytes += stat.size;
+      if (stat.mtimeMs > out.newestMs) out.newestMs = stat.mtimeMs;
+    }
+  }
+  const db = await statOrNull(path.join(store.dir, 'state.vscdb'));
+  out.dbBytes = db?.size ?? 0;
+  out.dbMtimeMs = db?.mtimeMs ?? 0;
+  if (out.dbMtimeMs > out.newestMs) out.newestMs = out.dbMtimeMs;
+  out.sessions = Math.max(out.stateFiles, out.transcriptFiles);
+  return out;
+}
+
+/**
+ * Workspace storages whose workspace no longer exists on disk.
+ *
+ * This is the fragmentation the tool can see but the editor cannot: VS Code keeps
+ * `<User>/workspaceStorage/<hash>/` for every workspace it has ever opened, keyed
+ * by a hash of the workspace URI. Move or delete the folder and the storage stays
+ * behind, still holding `chatSessions/*.jsonl` — conversations that no longer
+ * appear anywhere in the UI because no workspace points at them any more.
+ *
+ * Storages with no conversation files at all are dropped: there is nothing to
+ * consolidate, so reporting them would only be noise.
+ */
+export async function findOrphanStorages({ roots = null } = {}) {
+  const storages = await listAllStorages(roots);
+  const out = [];
+  for (const store of storages) {
+    let orphanReason = null;
+    if (!store.project) orphanReason = 'no-workspace-json';
+    else if (!(await statOrNull(store.project))) orphanReason = 'workspace-missing';
+    if (!orphanReason) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const summary = await storageSummary(store);
+    if (!summary.files) continue;
+    out.push({ ...store, ...summary, orphanReason });
+  }
+  return out.sort((a, b) => b.bytes - a.bytes);
+}
+
+/**
  * Copy one conversation between two storage folders of the same VS Code profile.
  * Dry-run unless `apply`. Never deletes.
  */

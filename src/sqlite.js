@@ -50,6 +50,32 @@ export function openReadOnly(dbPath) {
 }
 
 /**
+ * Open a writable connection; the caller must close it. Throws code ENOSQLITE.
+ * Every caller is expected to have gone through `safety.assertSafeWriteTarget`
+ * first — this function deliberately does no safety checking of its own.
+ */
+export function openWritable(dbPath) {
+  return connect(dbPath, { readOnly: false });
+}
+
+/** Read rows with a read-only connection and close it. Returns [] on any error. */
+export function query(dbPath, sql, params = []) {
+  let con;
+  try {
+    con = connect(dbPath, { readOnly: true });
+    return con.prepare(sql).all(...params);
+  } catch {
+    return [];
+  } finally {
+    try {
+      con?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
  * Read one `ItemTable` value. Returns `null` when missing.
  * @param {string} dbPath
  * @param {string} key

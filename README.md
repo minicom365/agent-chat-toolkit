@@ -61,6 +61,11 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 > language server and exports the whole trajectory — on a real 9,308-step
 > conversation whose transcript log had lost 78% of its head, it returned all
 > 9,308 steps (56.9 MB).
+>
+> What *is* lost is what the app cleared: a step whose status is
+> `CORTEX_STEP_STATUS_CLEARED` keeps its metadata and nothing else, on disk. One
+> measured conversation had 27,560 of 27,561 steps cleared, so the export is a
+> complete record of a thin conversation. See `docs/MIGRATION.md`.
 
 ---
 
@@ -72,6 +77,8 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 | **`find`** | keyword search with four detail levels, so tool noise never buries the decision you are looking for |
 | **`show`** | replay one conversation at the level of detail you need |
 | **`move`** | migrate a VS Code conversation into another workspace's storage, with backups and a dry-run default |
+| **`orphans`** | workspace storages that still hold conversations for a folder that no longer exists |
+| **`migrate`** | move an Antigravity conversation between instances, and file it under another project space |
 | **`recover`** | export the *full* encrypted store of an Antigravity conversation through its language server |
 | **`stats` / `time` / `tools`** | conversation statistics, tool usage and a defensible estimate of effective development time |
 | **`query` / `timeline` / `export`** | raw event access as text, JSON, Markdown or CSV |

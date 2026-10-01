@@ -13,6 +13,11 @@ import { previewOf, toRows } from './query.js';
 
 const SEP = '─'.repeat(72);
 
+/** Last path segment, for either separator, without importing node:path. */
+function baseName(p) {
+  return String(p).split(/[\\/]/).pop();
+}
+
 function h(st, title) {
   return `\n${st.bold(title)}\n${st.gray(SEP)}`;
 }
@@ -585,6 +590,123 @@ export function renderMovePlan(plan, { styler: st, session, target }) {
   if (!plan.apply) {
     out.push('');
     out.push(st.gray('  Re-run with --apply to write. A timestamped backup of state.vscdb is taken first.'));
+  }
+  return out.join('\n');
+}
+
+/* --------------------------------------------------------------- orphans */
+
+/**
+ * Workspace storages whose workspace is gone but whose conversations are not.
+ * These cannot be reached from the editor any more, so the report is about what
+ * is stranded and how much of it there is.
+ */
+export function renderOrphans(orphans, { styler: st, totalStorages = 0 }) {
+  const out = [h(st, 'Orphaned workspace storages')];
+  if (!orphans.length) {
+    out.push(st.green('  No storage holds conversations for a workspace that no longer exists.'));
+    return out.join('\n');
+  }
+  const bytes = orphans.reduce((n, o) => n + o.bytes, 0);
+  const sessions = orphans.reduce((n, o) => n + o.sessions, 0);
+  out.push(
+    kv(st, [
+      ['storages', `${orphans.length} of ${totalStorages} hold conversations but have no workspace`],
+      ['conversations', fmtInt(sessions)],
+      ['on disk', fmtBytes(bytes)],
+    ])
+  );
+  out.push('');
+  out.push(
+    table(
+      ['storage', 'conversations', 'size', 'last activity', 'workspace'],
+      orphans.map((o) => [
+        o.hash,
+        fmtInt(o.sessions),
+        fmtBytes(o.bytes),
+        o.newestMs ? new Date(o.newestMs).toISOString().slice(0, 16).replace('T', ' ') : '-',
+        o.project ?? st.yellow('(no workspace.json)'),
+      ]),
+      ['left', 'right', 'right', 'left', 'left']
+    )
+  );
+  out.push('');
+  out.push(
+    st.gray(
+      '  Each is reachable again with:\n' +
+        '    agchat move --session <id> --data-dir <user-data root> --to <live storage hash> --apply\n' +
+        '  List the stranded conversations with:  agchat sessions --orphans-only'
+    )
+  );
+  return out.join('\n');
+}
+
+/* -------------------------------------------------------------- migration */
+
+export function renderMigrationPlan(plan, { styler: st, apply }) {
+  const out = [h(st, apply ? 'Antigravity migration (applied)' : 'Antigravity migration (dry run)')];
+  out.push(
+    kv(st, [
+      ['conversation', plan.id],
+      ['from', plan.fromInstance],
+      ['to', plan.toInstance],
+      ['mode', apply ? st.red('APPLY (files written)') : st.green('dry-run (nothing written)')],
+    ])
+  );
+  out.push('');
+  if (plan.copies.length) {
+    out.push(st.bold('  Store files'));
+    out.push(
+      table(
+        ['file', 'action', 'bytes'],
+        plan.copies.map((c) => [
+          baseName(c.dst),
+          c.action === 'identical' ? st.gray('already present') : st.green(c.action),
+          fmtInt(c.bytes),
+        ]),
+        ['left', 'left', 'right']
+      )
+    );
+    for (const c of plan.copies) out.push(st.gray(`      ${c.dst}`));
+  } else {
+    out.push(st.gray('  No store files to copy.'));
+  }
+
+  const reg = plan.registration;
+  if (reg) {
+    out.push('');
+    out.push(st.bold('  Registry row (conversation_summaries)'));
+    out.push(
+      kv(st, [
+        ['action', reg.action === 'insert' ? st.green('insert') : reg.action === 'update' ? st.yellow('update') : st.gray('unchanged')],
+        ['app_data_dir', reg.row.app_data_dir],
+        ['workspace_uris', reg.row.workspace_uris],
+        ['project_id', reg.row.project_id || st.gray('(unassigned)')],
+        ['step_count', String(reg.row.step_count)],
+      ])
+    );
+    if (reg.action === 'update') out.push(st.gray(`      changed: ${reg.changed.join(', ')}`));
+  }
+
+  if (plan.applied) {
+    out.push('');
+    out.push(st.bold('  Written'));
+    for (const f of plan.applied.copied) out.push(`    + ${f}`);
+    if (plan.applied.registered) out.push('    + registry row upserted');
+    for (const b of plan.applied.backups) out.push(`    backup ${b}`);
+  }
+
+  if (plan.warnings?.length) {
+    out.push('');
+    for (const w of plan.warnings) out.push(st.yellow(`  ! ${w}`));
+  }
+  if (!apply) {
+    out.push('');
+    out.push(
+      st.gray(
+        '  Re-run with --apply to write. Close Antigravity first; the registry is backed up before the row is written.'
+      )
+    );
   }
   return out.join('\n');
 }

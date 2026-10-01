@@ -354,6 +354,118 @@ process.stdout.write('\nstatistics\n');
   check('effective time is less than wall clock', () => assert.ok(timing.active.ms < timing.span.ms));
 }
 
+process.stdout.write('\norphaned workspaces and antigravity migration\n');
+{
+  const { readRegistration } = await import('../src/hosts/antigravity-migrate.js');
+  const targetStore = path.join(
+    info.agIdeDir,
+    'conversations',
+    `${info.sessionAntigravity}.pb`
+  );
+
+  const o = run(['orphans', '--json'], env);
+  check('orphans --json exits 0', () => assert.equal(o.code, 0, o.err));
+  const report = JSON.parse(o.out);
+  check('a storage whose workspace folder is gone is reported', () =>
+    assert.ok(
+      report.orphans.some((s) => s.hash === info.storageA),
+      `hashes: ${report.orphans.map((s) => s.hash).join(',')}`
+    )
+  );
+  check('the orphan report counts conversations and bytes', () => {
+    const first = report.orphans.find((s) => s.hash === info.storageA);
+    assert.ok(first.sessions >= 1, 'no conversations counted');
+    assert.ok(first.bytes > 0, 'no bytes counted');
+  });
+
+  const ow = run(['sessions', '--orphaned-workspace', '--json'], env);
+  check('sessions --orphaned-workspace exits 0', () => assert.equal(ow.code, 0, ow.err));
+  const stranded = JSON.parse(ow.out);
+  check('the stranded conversation is listed', () =>
+    assert.ok(stranded.some((s) => s.id === info.sessionAlpha))
+  );
+  check('a conversation in a live workspace is not listed as stranded', () =>
+    assert.ok(!stranded.some((s) => s.host === 'antigravity'))
+  );
+
+  const dry = run(
+    [
+      'migrate',
+      '--session',
+      info.sessionAntigravity,
+      '--from',
+      'antigravity',
+      '--to',
+      'antigravity-ide',
+      '--json',
+    ],
+    env
+  );
+  check('migrate dry run exits 0', () => assert.equal(dry.code, 0, dry.err));
+  const plan = JSON.parse(dry.out);
+  check('the dry run plans a registry insert', () =>
+    assert.equal(plan.registration?.action, 'insert')
+  );
+  check('the dry run writes nothing', () => assert.ok(!fs.existsSync(targetStore)));
+
+  const applied = run(
+    [
+      'migrate',
+      '--session',
+      info.sessionAntigravity,
+      '--from',
+      'antigravity',
+      '--to',
+      'antigravity-ide',
+      '--apply',
+      '--json',
+    ],
+    env
+  );
+  check('migrate --apply exits 0', () => assert.equal(applied.code, 0, applied.err));
+  check('the store reached the target instance', () => assert.ok(fs.existsSync(targetStore)));
+  check('the registry row now names the target instance', () => {
+    if (!info.sqlite) return;
+    // GEMINI_DIR is set for the child processes only, so read the sandbox tree
+    // explicitly rather than letting the module fall back to the real profile.
+    const row = readRegistration('antigravity-ide', info.sessionAntigravity, info.root);
+    assert.ok(row, 'no registry row written');
+    assert.equal(row.app_data_dir, 'antigravity-ide');
+  });
+  check('the source store was not removed', () =>
+    assert.ok(
+      fs.existsSync(path.join(info.agDir, 'conversations', `${info.sessionAntigravity}.pb`))
+    )
+  );
+
+  const again = JSON.parse(
+    run(
+      [
+        'migrate',
+        '--session',
+        info.sessionAntigravity,
+        '--from',
+        'antigravity',
+        '--to',
+        'antigravity-ide',
+        '--json',
+      ],
+      env
+    ).out
+  );
+  check('re-running the migration finds nothing to copy', () =>
+    assert.ok(again.copies.every((c) => c.action === 'identical'))
+  );
+
+  const unknown = run(
+    ['migrate', '--session', info.sessionAntigravity, '--to', 'no-such-instance'],
+    env
+  );
+  check('an unknown destination instance fails loudly', () =>
+    assert.notEqual(unknown.code, 0)
+  );
+}
+
 process.stdout.write('\nmigration safety\n');
 {
   const alphaState = path.join(info.storeA, 'chatSessions', `${info.sessionAlpha}.jsonl`);

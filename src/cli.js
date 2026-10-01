@@ -11,7 +11,9 @@ import {
   exportJson,
   exportMarkdown,
   renderHosts,
+  renderMigrationPlan,
   renderMovePlan,
+  renderOrphans,
   renderQuery,
   renderSearchResults,
   renderSegments,
@@ -23,14 +25,21 @@ import {
 } from './render.js';
 import { detect, formatList } from './formats/index.js';
 import { HOSTS, allSessions, findSession, inventory, byId as hostById } from './hosts/index.js';
-import { moveSession } from './hosts/vscode.js';
+import { findOrphanStorages, listAllStorages, moveSession } from './hosts/vscode.js';
+import {
+  applyMigration,
+  listInstances,
+  pathToFileUri,
+  planMigration,
+  readRegistration,
+} from './hosts/antigravity-migrate.js';
 import { countSteps, defaultLsBinary, recoverTrajectory } from './hosts/antigravity-recover.js';
 import { LEVEL_DEFAULT_CHARS, levelName, searchSessions } from './search.js';
 import { SafetyError, formatSafetyError } from './safety.js';
 import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.3.4';
+export const VERSION = '0.4.0';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
@@ -48,6 +57,8 @@ COMMANDS
   find                   keyword search across hosts, with detail levels 1-4
   show                   print one conversation (-s <id>) at a detail level
   move                   copy a VS Code conversation into another workspace storage
+  orphans                workspace storages whose workspace is gone but chats remain
+  migrate                move an Antigravity conversation to another instance/project
   recover                export the FULL encrypted store of an Antigravity conversation
   stats                  statistics for one transcript (default)
   time                   effective development time detail
@@ -86,12 +97,28 @@ MOVING A CONVERSATION (VS Code only)
       --i-know-what-im-doing  allow writing into a live data directory
       --allow-running       allow writing while the host application is running
 
+ORPHANED WORKSPACES (VS Code)
+  agchat orphans            list storages that still hold chats for a deleted folder
+  agchat sessions --orphaned-workspace   only conversations stranded that way
+
+MIGRATING A CONVERSATION (Antigravity, registry based)
+  -s, --session <id>        conversation to move
+      --to <instance>       destination instance, e.g. antigravity-ide
+      --workspace <path>    register it under this project path (default: keep)
+      --project-id <uuid>   project-space id (empty string clears it)
+      --from <instance>     instance that currently owns the store
+      --apply               actually write (default is a dry run)
+      --i-know-what-im-doing  allow writing into the live ~/.gemini profile
+      --allow-running       allow writing while Antigravity is running
+
 RECOVERING A CONVERSATION (Antigravity, via the language server)
   -s, --session <id>        conversation to export (its .pb store is decrypted)
       --out <file>          where to write the trajectory JSON (default <id>.json)
       --ls-binary <path>    language server binary (else ANTIGRAVITY_LS_PATH / auto)
-  NOTE: a few very large stores are corrupt (server returns 500); listing is
-        capped at ~100 summaries, so recovery is per-id and may miss nothing.
+      --instance <name>     pick the instance when the id exists in several
+  NOTE: recovery pages GetCascadeTrajectorySteps, so the 64 MiB ceiling that
+        truncates GetCascadeTrajectory does not apply. Steps the app itself
+        CLEARED keep only their metadata; that content is gone from the store.
 
 FILTERS (query / timeline / export)
       --type <t>          event type, repeatable / comma separated
@@ -149,6 +176,10 @@ export async function main(argv) {
         return await cmdShow(opts, st);
       case 'move':
         return await cmdMove(opts, st);
+      case 'orphans':
+        return await cmdOrphans(opts, st);
+      case 'migrate':
+        return await cmdMigrate(opts, st);
       case 'recover':
         return await cmdRecover(opts, st);
       case 'stats':
@@ -199,13 +230,24 @@ function cmdFormats(opts, st) {
 
 async function cmdSessions(opts, st) {
   const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
-  const filtered = applySessionFilters(sessions, opts);
+  const scoped = opts.orphanedWorkspace ? await filterOrphans(sessions, opts) : sessions;
+  const filtered = applySessionFilters(scoped, opts);
   const limited = opts.limit ? filtered.slice(0, opts.limit) : filtered;
   if (opts.json) return writeOut(JSON.stringify(limited, null, 2), opts);
   return writeOut(
     renderSessions(limited, { styler: st, limit: opts.limit || 60, total: filtered.length }),
     opts
   );
+}
+
+/**
+ * Keep only sessions whose storage folder belongs to a workspace that is gone.
+ * `options` carries the roots so the same discovery path is reused.
+ */
+async function filterOrphans(sessions, options) {
+  const orphans = await findOrphanStorages({ roots: options.root?.length ? options.root : null });
+  const dirs = new Set(orphans.map((o) => o.dir));
+  return sessions.filter((s) => s.storageDir && dirs.has(s.storageDir));
 }
 
 function applySessionFilters(sessions, opts) {
@@ -310,6 +352,86 @@ async function cmdShow(opts, st) {
   const out = [st.gray(`level ${level} (${levelName(level)})`)];
   out.push(renderSearchResults(results, { styler: st, level }));
   return writeOut(out.join('\n'), opts);
+}
+
+/* ---------------------------------------------------------------- orphans */
+
+/**
+ * Workspace storages nobody points at any more.
+ *
+ * A storage is orphaned when its `workspace.json` names a folder that no longer
+ * exists. VS Code keeps the folder forever, so its `chatSessions/*.jsonl` become
+ * conversations the UI cannot reach — which is exactly the fragmentation `move`
+ * exists to repair. This command only reports; the repair stays per-session so
+ * every copy is itemised.
+ */
+async function cmdOrphans(opts, st) {
+  const roots = opts.root?.length ? opts.root : null;
+  const storages = await listAllStorages(roots);
+  const orphans = await findOrphanStorages({ roots });
+  if (opts.json) {
+    return writeOut(JSON.stringify({ totalStorages: storages.length, orphans }, null, 2), opts);
+  }
+  return writeOut(renderOrphans(orphans, { styler: st, totalStorages: storages.length }), opts);
+}
+
+/* --------------------------------------------------------------- migrate */
+
+/**
+ * Move an Antigravity conversation to another instance, and/or register it under
+ * a different project space. The registry table carries both facts
+ * (`app_data_dir`, `workspace_uris`+`project_id`), so this is a store copy plus
+ * one row.
+ */
+async function cmdMigrate(opts, st) {
+  if (!opts.session) throw new SafetyError('migrate needs --session <id>.', 'NO_SESSION');
+  if (!opts.to) throw new SafetyError('migrate needs --to <instance>.', 'NO_TARGET');
+
+  const sessions = await allSessions({ hosts: ['antigravity'], roots: opts.root });
+  // `--from` names the owning instance, so it also scopes the lookup; the same
+  // conversation id normally exists in every instance on the machine.
+  const scope = opts.fromInstance ? String(opts.fromInstance) : opts.instance;
+  const pool = scope ? sessions.filter((s) => s.instance === scope) : sessions;
+  const one = findSession(pool, opts.session);
+  const fromInstance = opts.fromInstance ? String(opts.fromInstance) : one.instance;
+  if (!fromInstance) {
+    throw new Error(`Cannot tell which instance owns ${one.id}; pass --from <instance>.`);
+  }
+
+  const toInstance = String(opts.to);
+  const known = await listInstances();
+  if (!known.some((i) => i.instance === toInstance)) {
+    throw new SafetyError(
+      `No Antigravity instance named "${toInstance}". Known: ${known.map((i) => i.instance).join(', ') || '(none)'}`,
+      'NO_TARGET'
+    );
+  }
+
+  const workspaceUri = opts.workspace
+    ? String(opts.workspace).startsWith('file:')
+      ? String(opts.workspace)
+      : pathToFileUri(String(opts.workspace))
+    : null;
+
+  const plan = await planMigration({
+    id: one.id,
+    fromInstance,
+    toInstance,
+    workspaceUri,
+    projectId: opts.projectId !== undefined ? String(opts.projectId) : undefined,
+    title: one.title,
+  });
+
+  if (opts.apply) {
+    plan.applied = await applyMigration(plan, {
+      apply: true,
+      allowReal: Boolean(opts.allowReal),
+      allowRunning: Boolean(opts.allowRunning),
+    });
+  }
+
+  if (opts.json) return writeOut(JSON.stringify(plan, null, 2), opts);
+  return writeOut(renderMigrationPlan(plan, { styler: st, apply: Boolean(opts.apply) }), opts);
 }
 
 /* ------------------------------------------------------------------- move */
@@ -786,6 +908,18 @@ export function parseArgs(argv) {
         break;
       case '--instance':
         opts.instance = take(a);
+        break;
+      case '--from':
+        opts.fromInstance = take(a);
+        break;
+      case '--workspace':
+        opts.workspace = take(a);
+        break;
+      case '--project-id':
+        opts.projectId = take(a);
+        break;
+      case '--orphaned-workspace':
+        opts.orphanedWorkspace = true;
         break;
       case '--not-indexed':
       case '--hidden':

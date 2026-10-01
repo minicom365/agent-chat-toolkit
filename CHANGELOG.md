@@ -4,6 +4,62 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-01
+
+Two questions that turned out to have the same answer: where a conversation
+*belongs* is recorded, and what happens when the thing it belongs to is gone.
+
+### Added
+
+- **`agchat orphans`** — VS Code keeps `<User>/workspaceStorage/<hash>/` for
+  every workspace it has ever opened, keyed by a hash of the workspace URI. Move
+  or delete the folder and the storage stays behind, still holding
+  `chatSessions/*.jsonl` that no workspace points at any more. Measured on a real
+  profile: **6 of 416 storages hold 10 conversations for workspaces that no
+  longer exist** (4.3 MB). Storages with no conversation files are skipped, so
+  the report is only what is actually stranded.
+- **`agchat sessions --orphaned-workspace`** — the same set as a conversation
+  list, ready to feed `move`. (Note: `--orphans-only` already existed and means
+  something else — a conversation missing from the app's own index.)
+- **`agchat migrate`** — moves an Antigravity conversation between instances
+  and/or re-registers it under another project space. Antigravity keeps an
+  explicit registry, which is what makes this well-defined:
+
+  | column | meaning |
+  | --- | --- |
+  | `app_data_dir` | which instance owns the store |
+  | `workspace_uris` | JSON array of `file://` URIs = the project space |
+  | `project_id` | project-space UUID, `''` = unassigned |
+
+  So a move is a store copy plus one row. `--to <instance>`, `--workspace`,
+  `--project-id`, dry-run by default, `--apply` to write, registry backed up
+  first, and a target instance without a registry is reported instead of
+  silently skipping registration.
+- `src/hosts/antigravity-migrate.js` — `listInstances`, `listStores`,
+  `readRegistration`, `readRegistry`, `registryColumns`, `planMigration`,
+  `applyMigration`, `pathToFileUri`, `parseUriList`. Honours `GEMINI_DIR` so it
+  is testable against a throwaway tree.
+
+### Fixed
+
+- `migrate` scopes its lookup with `--from`, which matters because the same
+  conversation id normally exists in **every** instance on the machine — an
+  unfiltered lookup is ambiguous by design, not by accident.
+
+### Investigated, with the result recorded rather than shipped
+
+- **Why a language server recovery tool can rank differently from another.**
+  `GetAllCascadeTrajectories` returns `{}` when the server is started standalone,
+  so any tool that enumerates through it finds nothing; the filesystem is the
+  only reliable enumeration. `GetCascadeTrajectory` additionally stops at 64 MiB
+  (v0.3.4), and `--app_data_dir` defaults to a different instance.
+- **Why large conversations look empty in the app.** Step payloads are evicted
+  by Antigravity itself: a step is marked `CORTEX_STEP_STATUS_CLEARED` (status 5
+  in the plaintext store, where `3` is DONE and `6` is CANCELED) and its payload
+  is replaced by a metadata-only stub — on disk, not just in the response. A
+  measured conversation had 27,560 of 27,561 steps cleared, so no tool, key or
+  protocol can bring that text back. What survives is exported in full.
+
 ## [0.3.4] - 2026-10-01
 
 A second, adversarial pass over every store on the profile found a ceiling that

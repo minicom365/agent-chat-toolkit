@@ -38,6 +38,8 @@ export {
   renderSessions,
   renderSearchResults,
   renderMovePlan,
+  renderMigrationPlan,
+  renderOrphans,
   renderStats,
   coverageLines,
   renderTime,
@@ -50,7 +52,19 @@ export { HOSTS, allSessions, findSession, inventory, hostIds } from './hosts/ind
 export { vscode as vscodeHost, antigravity as antigravityHost } from './hosts/index.js';
 export { logSourcesFor, stepRangeOf } from './hosts/antigravity.js';
 export { countSteps, defaultLsBinary, extractStepsArray, recoverTrajectory, launchLanguageServer, postJson, LS_ENDPOINT, LS_STEPS_ENDPOINT } from './hosts/antigravity-recover.js';
-export { moveSession } from './hosts/vscode.js';
+export { moveSession, findOrphanStorages, storageSummary, listAllStorages } from './hosts/vscode.js';
+export {
+  listInstances,
+  listStores,
+  readRegistration,
+  readRegistry,
+  registryColumns,
+  planMigration,
+  applyMigration,
+  pathToFileUri,
+  parseUriList,
+  REGISTRY_DB,
+} from './hosts/antigravity-migrate.js';
 export {
   searchSessions,
   projectLevel,
