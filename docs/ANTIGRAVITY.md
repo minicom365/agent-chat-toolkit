@@ -202,6 +202,44 @@ The `overview.txt` merge remains the only offline source, and a conversation
 with a `skel`/`lost` head reported by `stats` is still a **lower bound** until
 `recover` is run.
 
+### A memory scan for the key, and why its negative is not a result
+
+The last resort was to look for the key in the language server's own memory: dump
+the process, then treat every byte offset as a candidate 16-byte AES key and test
+it against a `.pb` whose plaintext is known. That scan ran to completion —
+**320,602,097 windows, every offset, 2,403 s** — and reported no hit. **The
+negative does not hold**, and the reason is worth recording.
+
+A positive control (plant a known key in a decoy buffer, at an unaligned offset,
+and check the scanner finds it) separates the two halves of the tool:
+
+| control | plaintext shape | result |
+| --- | --- | --- |
+| A | six short protobuf fields (64 B) | **found** ✅ |
+| B | one long length-delimited field (66 B) | **missed** ❌ |
+
+So the AES rounds, the CTR counter handling and the oracle search are all
+correct — control A exercises every one of them. The defect is the **prefilter**:
+it demands at least three protobuf fields inside the first 64 bytes of plaintext,
+and a container whose first field wraps the whole payload can never satisfy that.
+The true key is then skipped silently, without any error.
+
+Whether the real `.pb` has that shape is unknown — the container layout cannot be
+read without the key — so the honest statement is: *the key was not found as a
+16-byte window in memory, if the container begins with three short fields.* That
+condition is unverified, which makes the scan inconclusive rather than negative.
+
+A conclusive scan is possible but must be built differently: with **16 bytes of
+known plaintext**, a candidate costs one AES block instead of a full decrypt, so
+the check becomes sound *and* fast (one block per offset, ~40 min at the observed
+rate). Without known plaintext a sound filter has to accept every prefix that
+cannot be disproved, which inflates the candidate set from 320 million to tens of
+millions of full 100 KB decrypts — days, not minutes.
+
+None of this blocks recovery: the key would decrypt the same bytes the API
+already serves, and `GetCascadeTrajectorySteps` returns every step the store
+still holds.
+
 ## Exporting a `lock`ed conversation
 
 The key is not derivable offline, but the bundled language server holds it and
