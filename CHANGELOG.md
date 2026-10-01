@@ -4,6 +4,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-01
+
+### Added
+
+- **`agchat salvage`** — recovers text from the space SQLite released. Antigravity
+  "clears" a step by replacing its payload with a metadata stub, which makes the
+  text unreachable through a row; it does not erase it, because SQLite frees pages
+  without zeroing them. This reads the two regions the database no longer hands
+  out — the unallocated gap inside allocated pages, and freelist pages — and keeps
+  only what the live rows cannot produce.
+
+  Measured on a 62.9 MB store reporting 9,064 of 10,085 steps as CLEARED:
+  **1.7 MB of prose recovered**, from 18.6 MB of page slack plus 8.6 MB of
+  freelist. Read-only; it never writes to the database.
+
+- `src/hosts/antigravity-salvage.js` — `pageGeometry`, `unallocatedRanges`,
+  `proseRuns`, `looksLikeProse`, `shingleSet`, `filterLost`, `liveTextOf`,
+  `salvageFile`. Zero dependencies.
+
+### Notes on the method
+
+- `--out <file>` writes the recovered text; without it only a summary and a
+  preview are printed.
+- Runs are compared against live text with **overlapping 64-character windows**,
+  not whole-run substring tests: one differing character in several thousand
+  makes a run look absent, and the same passage is often present both live and
+  stale.
+- A quality filter rejects structural debris (paths, JSON keys, identifiers) so
+  the reported total is prose rather than everything that decodes as text. On the
+  measured store it removes about a third of the raw matches.
+- Only the plaintext generation benefits. A `.pb` is ciphertext end to end, so
+  its released pages hold no readable text; the command says so instead of
+  returning nothing.
+
 ## [0.4.1] - 2026-10-01
 
 ### Fixed

@@ -144,6 +144,46 @@ That is also why the 64 MiB reader ceiling and the eviction belong to the same
 story: eviction keeps a store near the ceiling, and what still exceeds it is the
 part that cannot be reached without paging.
 
+### The evicted text is still in the file (plaintext generation)
+
+"Cleared" means *no longer reachable through a row*, not *overwritten*. SQLite
+releases space without zeroing it, so the bytes stay readable in two places:
+
+- the **unallocated region** of an allocated page — the gap between the end of
+  the cell pointer array and the start of the cell content area;
+- **freelist pages**, which the header links as a trunk/leaf list.
+
+Measured on a `.db` whose store reports 9,064 of 10,085 steps as CLEARED, taking
+only those two regions and nothing else:
+
+| | value |
+| --- | --- |
+| unallocated region of allocated pages | 18.61 MB of a 62.9 MB file |
+| prose found in it | 0.43 MB |
+| …of that prose, **not returned by the server** | **87.3%** |
+| readable text the file holds and the API does not | ~0.24 MB |
+
+The same text is in **no live row** — a full scan of every table and every BLOB
+column finds none of it — so it is genuinely content the store released, not a
+duplicate of something still served.
+
+Across all 51 plaintext stores on the profile:
+
+| | MB | share |
+| --- | --- | --- |
+| step_payload | 203.3 | 39.6% |
+| auxiliary tables | 62.7 | 12.2% |
+| page slack | 111.9 | 21.8% |
+| freelist | 54.8 | 10.7% |
+| prose left in the two unallocated regions | **7.2** | — |
+
+So the unexplained third of every `.db` is page slack and freelist, and roughly
+**6.3 MB** of prose sits in it that the language server will not hand back.
+
+The encrypted generation is different and gets no such reprieve: a `.pb` is
+ciphertext end to end, so there is no plaintext in its slack, and nothing here
+recovers a cleared step from one.
+
 `agchat sessions` marks these conversations in the `head` column:
 `full` when the content transcript is complete, `skel` when the head survives
 only as a cleared skeleton, `lost` when no log covers the head at all, and

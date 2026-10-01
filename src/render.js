@@ -712,6 +712,51 @@ export function renderMigrationPlan(plan, { styler: st, apply }) {
   return out.join('\n');
 }
 
+/* --------------------------------------------------------------- salvage */
+
+/**
+ * What was found in the space SQLite released, and a preview of it.
+ * The full text belongs in a file, not in a terminal.
+ */
+export function renderSalvage(result, { styler: st, preview = 12, out = null }) {
+  const outLines = [h(st, 'Salvaged text (plaintext store)')];
+  outLines.push(
+    kv(st, [
+      ['store', result.file],
+      ['file', `${fmtBytes(result.fileBytes)} · ${fmtInt(result.pageCount)} pages`],
+      ['released', `${fmtBytes(result.slackBytes)} slack + ${fmtBytes(result.freeBytes)} freelist (${fmtInt(result.freePages)} pages)`],
+      ['scanned', fmtBytes(result.deadBytes)],
+      ['runs found', `${fmtInt(result.runs)} · kept ${fmtInt(result.lost)}`],
+      ['recovered', `${fmtBytes(result.lostChars)} of text`],
+    ])
+  );
+  if (!result.lost) {
+    outLines.push('');
+    outLines.push(st.gray('  Nothing readable in the released space that the store does not already serve.'));
+    return outLines.join('\n');
+  }
+  outLines.push('');
+  outLines.push(st.bold(`  Preview (first ${Math.min(preview, result.lost)} of ${fmtInt(result.lost)})`));
+  for (const t of result.text.slice(0, preview)) {
+    outLines.push('');
+    outLines.push(st.gray('  ───'));
+    outLines.push(
+      t
+        .split('\n')
+        .slice(0, 4)
+        .map((l) => `  ${l.slice(0, 150)}`)
+        .join('\n')
+    );
+  }
+  outLines.push('');
+  outLines.push(
+    out
+      ? st.green(`  Full text written to ${out}`)
+      : st.gray('  Pass --out <file> to write the recovered text.')
+  );
+  return outLines.join('\n');
+}
+
 /* ----------------------------------------------------------------- query */
 
 export function renderQuery(events, { styler: st, limit }) {

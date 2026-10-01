@@ -15,6 +15,7 @@ import {
   renderMovePlan,
   renderOrphans,
   renderQuery,
+  renderSalvage,
   renderSearchResults,
   renderSegments,
   renderSessions,
@@ -29,17 +30,19 @@ import { findOrphanStorages, listAllStorages, moveSession } from './hosts/vscode
 import {
   applyMigration,
   listInstances,
+  listStores,
   pathToFileUri,
   planMigration,
   readRegistration,
 } from './hosts/antigravity-migrate.js';
+import { salvageFile } from './hosts/antigravity-salvage.js';
 import { countSteps, defaultLsBinary, recoverTrajectory } from './hosts/antigravity-recover.js';
 import { LEVEL_DEFAULT_CHARS, levelName, searchSessions } from './search.js';
 import { SafetyError, formatSafetyError } from './safety.js';
-import { sqliteAvailable } from './sqlite.js';
+import { openReadOnly, sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.4.1';
+export const VERSION = '0.5.0';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
@@ -59,6 +62,7 @@ COMMANDS
   move                   copy a VS Code conversation into another workspace storage
   orphans                workspace storages whose workspace is gone but chats remain
   migrate                move an Antigravity conversation to another instance/project
+  salvage                recover text from a store's released SQLite pages
   recover                export the FULL encrypted store of an Antigravity conversation
   stats                  statistics for one transcript (default)
   time                   effective development time detail
@@ -180,6 +184,8 @@ export async function main(argv) {
         return await cmdOrphans(opts, st);
       case 'migrate':
         return await cmdMigrate(opts, st);
+      case 'salvage':
+        return await cmdSalvage(opts, st);
       case 'recover':
         return await cmdRecover(opts, st);
       case 'stats':
@@ -432,6 +438,76 @@ async function cmdMigrate(opts, st) {
 
   if (opts.json) return writeOut(JSON.stringify(plan, null, 2), opts);
   return writeOut(renderMigrationPlan(plan, { styler: st, apply: Boolean(opts.apply) }), opts);
+}
+
+/* --------------------------------------------------------------- salvage */
+
+/**
+ * Recover text from the space SQLite released.
+ *
+ * Antigravity "clears" a step by replacing its payload with a metadata stub.
+ * That makes the text unreachable through a row; it does not erase it, because
+ * SQLite frees space without zeroing it. This reads the two regions it no longer
+ * hands out — the unallocated gap inside allocated pages, and freelist pages —
+ * and keeps only what the live rows cannot produce.
+ *
+ * Read-only: it never touches the database it reads.
+ */
+async function cmdSalvage(opts, st) {
+  if (!opts.session) throw new SafetyError('salvage needs --session <id>.', 'NO_SESSION');
+
+  const sessions = await allSessions({ hosts: ['antigravity'], roots: opts.root });
+  const scope = opts.instance ? String(opts.instance) : null;
+  const pool = scope ? sessions.filter((s) => s.instance === scope) : sessions;
+  const one = findSession(pool, opts.session);
+
+  const stores = await listStores(one.instance);
+  const entry = stores.get(one.id);
+  const store = entry?.files.find((f) => f.kind === 'db');
+  if (!store) {
+    throw new Error(
+      `No plaintext .db store for ${one.id} in ${one.instance}. ` +
+        'Only the plaintext generation keeps readable text in its released pages — ' +
+        'a .pb is ciphertext end to end. Use `agchat recover` for those.'
+    );
+  }
+
+  let db = null;
+  if (sqliteAvailable()) {
+    try {
+      db = openReadOnly(store.path);
+    } catch {
+      db = null;
+    }
+  }
+  let result;
+  try {
+    result = salvageFile(store.path, {
+      db,
+      min: opts.minChars ? Number(opts.minChars) : undefined,
+    });
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (opts.json) {
+    const { text, ...rest } = result;
+    return writeOut(JSON.stringify({ ...rest, preview: text.slice(0, 20) }, null, 2), opts);
+  }
+
+  if (opts.out) {
+    await fsp.writeFile(String(opts.out), result.text.join('\n\n---\n\n'), 'utf8');
+  }
+  const rendered = renderSalvage(result, {
+    styler: st,
+    out: opts.out ? String(opts.out) : null,
+  });
+  // The summary goes to stdout even when --out captured the recovered text.
+  return writeOut(rendered, opts.out ? { ...opts, out: null } : opts);
 }
 
 /* ------------------------------------------------------------------- move */
@@ -917,6 +993,9 @@ export function parseArgs(argv) {
         break;
       case '--project-id':
         opts.projectId = take(a);
+        break;
+      case '--min-chars':
+        opts.minChars = take(a);
         break;
       case '--orphaned-workspace':
         opts.orphanedWorkspace = true;
