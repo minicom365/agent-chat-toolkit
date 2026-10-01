@@ -62,6 +62,32 @@ Two consequences worth stating plainly:
   cleared skeletons, so an export is a complete *record* even when it is a thin
   *transcript*.
 
+### What could still be patched, and what it rests on
+
+The 64 MiB ceiling is a **reader** limit, so a conversation can be re-homed into
+reader that has no ceiling. The plaintext `.db` generation is exactly such a
+reader, and the wire formats line up, which was checked rather than assumed:
+
+- `application/proto` works. Posting the same request with
+  `Content-Type: application/proto` instead of `application/json` returns
+  HTTP 200 and **11,212 bytes instead of 17,232** for a 7-step conversation, with
+  7 top-level entries — the same step count.
+- The step bytes are already the exact shape the store keeps. A step begins
+  `08 <type> 20 <status> 2a <metadata…>` on the wire, and the `.db`'s
+  `step_payload` blob for the same kind of step is the identical
+  `08 … 20 … 2a …` framing.
+
+So a conversion would be: read the steps as protobuf, write them into a `.db`
+with the same schema (`steps`, `trajectory_meta`, `gen_metadata`,
+`executor_metadata`, `parent_references`, `trajectory_metadata_blob`), and
+register it. Nothing has to be re-encoded field by field.
+
+Two things are still unknown and are the reason this is written down rather than
+shipped: whether the app prefers `.db` when both stores exist for one
+conversation, and whether it rebuilds the sidebar from the registry. Neither can
+be settled without a sandbox profile and a running build, and getting it wrong
+in the live profile is the kind of mistake this project refuses to make.
+
 ## 3. Moving an Antigravity conversation between instances or projects
 
 Antigravity keeps an explicit registry, which is what makes this well-defined
