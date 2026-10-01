@@ -63,7 +63,7 @@ panel.
 
 ### Tests
 
-54 unit specs (was 37) plus 46 sandbox end-to-end checks. Verified on Windows/Node 26
+55 unit specs (was 37) plus 46 sandbox end-to-end checks. Verified on Windows/Node 26
 and inside `node:24-alpine` with `--network none`.
 
 ## [0.1.0] - 2026-10-01

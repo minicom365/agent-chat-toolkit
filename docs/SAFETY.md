@@ -11,7 +11,7 @@ Every operation that writes is gated by `src/safety.js`.
 | # | rule | failure mode it prevents |
 | --- | --- | --- |
 | 1 | `--data-dir` is mandatory; there is no implicit target | a typo silently hitting the live profile |
-| 2 | A target inside an **OS-default** product root is refused unless `--i-know-what-im-doing` | automation or a stale env var writing to the real profile |
+| 2 | `--apply` against a target inside an **OS-default** product root is refused unless `--i-know-what-im-doing` (a dry run is allowed, and says so) | automation or a stale env var writing to the real profile |
 | 3 | Dry-run is the default; `--apply` is required to write | a "just look at it" command mutating state |
 | 4 | Writing while the host application is running is refused unless `--allow-running` | the editor flushing its in-memory index over the change, losing entries |
 | 5 | `state.vscdb` is copied to `state.vscdb.bak-<timestamp>` before the first write (never overwriting an existing backup) | an unrecoverable index |
@@ -24,6 +24,14 @@ Rule 2 deliberately looks at **OS defaults only**, computed with the
 points the tool at synthetic data, so treating them as "live" would make the sandbox
 unusable while protecting nothing: the dangerous path is the real profile, and that is
 what stays guarded.
+
+A dry run against a live root is permitted, because a preview writes nothing. It prints
+the full plan plus an explicit warning that `--apply` will be refused:
+
+```
+  ! Preview only. This is a LIVE vscode data directory; --apply will be refused
+    without --i-know-what-im-doing.
+```
 
 ```
 REAL_ROOT    refusing to write into a live data directory

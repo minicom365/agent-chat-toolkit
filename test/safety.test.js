@@ -30,18 +30,34 @@ test('a target that is not a directory is refused', async () => {
   await fsp.rm(dir, { recursive: true, force: true });
 });
 
+test('a dry run against a live root is allowed but warned about', async () => {
+  const fakeRoot = await tmpdir('preview');
+  const res = await assertSafeWriteTarget({
+    targetDir: fakeRoot,
+    realRoots: [fakeRoot],
+    apply: false,
+  });
+  assert.equal(res.hitsRealRoot, true);
+  assert.equal(res.warnings.length, 1);
+  assert.match(res.warnings[0], /Preview only/);
+  await fsp.rm(fakeRoot, { recursive: true, force: true });
+});
+
 test('an OS-default product root is guarded unless explicitly allowed', async () => {
   const fakeRoot = await tmpdir('realroot');
   await assert.rejects(
-    () => assertSafeWriteTarget({ targetDir: fakeRoot, realRoots: [fakeRoot] }),
+    () => assertSafeWriteTarget({ targetDir: fakeRoot, realRoots: [fakeRoot], apply: true }),
     (err) => err.code === 'REAL_ROOT'
   );
   const ok = await assertSafeWriteTarget({
     targetDir: fakeRoot,
     realRoots: [fakeRoot],
     allowReal: true,
+    apply: true,
+    host: 'nonexistent-host',
   });
   assert.equal(ok.warnings.length, 1);
+  assert.match(ok.warnings[0], /LIVE/);
   await fsp.rm(fakeRoot, { recursive: true, force: true });
 });
 
@@ -50,7 +66,7 @@ test('a nested directory of a guarded root is also guarded', async () => {
   const child = path.join(root, 'workspaceStorage', 'abc');
   await fsp.mkdir(child, { recursive: true });
   await assert.rejects(
-    () => assertSafeWriteTarget({ targetDir: child, realRoots: [root] }),
+    () => assertSafeWriteTarget({ targetDir: child, realRoots: [root], apply: true }),
     (err) => err.code === 'REAL_ROOT'
   );
   await fsp.rm(root, { recursive: true, force: true });
@@ -59,8 +75,16 @@ test('a nested directory of a guarded root is also guarded', async () => {
 test('a sandbox location passes the guard untouched', async () => {
   const sandbox = await tmpdir('sandbox');
   const real = await tmpdir('real');
-  const res = await assertSafeWriteTarget({ targetDir: sandbox, realRoots: [real] });
+  // host: 'nonexistent-host' keeps the running-process check out of the way so the
+  // test does not depend on whether an editor happens to be open on this machine.
+  const res = await assertSafeWriteTarget({
+    targetDir: sandbox,
+    realRoots: [real],
+    apply: true,
+    host: 'nonexistent-host',
+  });
   assert.deepEqual(res.warnings, []);
+  assert.equal(res.hitsRealRoot, false);
   await fsp.rm(sandbox, { recursive: true, force: true });
   await fsp.rm(real, { recursive: true, force: true });
 });

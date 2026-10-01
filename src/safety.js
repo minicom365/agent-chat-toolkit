@@ -102,19 +102,31 @@ export async function assertSafeWriteTarget(opts) {
   // VSCODE_USER_DIR / GEMINI_DIR is a deliberate choice (e.g. a sandbox), so it
   // must stay usable without an override flag.
   const realRoots = opts.realRoots ?? userDataDirs({ useEnv: false });
+  let hitsRealRoot = false;
   for (const root of realRoots) {
     // eslint-disable-next-line no-await-in-loop
     if (await isSameOrInside(abs, root)) {
-      if (!allowReal) {
-        throw new SafetyError(
-          `Refusing to write into a live ${host} data directory:\n  ${abs}\n` +
-            'Point --data-dir at a copy/sandbox, or pass --i-know-what-im-doing to override.',
-          'REAL_ROOT'
-        );
-      }
-      warnings.push(`Writing into a LIVE ${host} data directory: ${abs}`);
+      hitsRealRoot = true;
       break;
     }
+  }
+
+  if (hitsRealRoot) {
+    // A preview writes nothing, so it is allowed - but the user must be told that
+    // the write itself would be refused.
+    if (apply && !allowReal) {
+      throw new SafetyError(
+        `Refusing to write into a live ${host} data directory:\n  ${abs}\n` +
+          'Point --data-dir at a copy/sandbox, or pass --i-know-what-im-doing to override.',
+        'REAL_ROOT'
+      );
+    }
+    warnings.push(
+      apply
+        ? `Writing into a LIVE ${host} data directory: ${abs}`
+        : `Preview only. This is a LIVE ${host} data directory; --apply will be refused ` +
+            'without --i-know-what-im-doing.'
+    );
   }
 
   if (apply) {
@@ -130,7 +142,7 @@ export async function assertSafeWriteTarget(opts) {
     if (running.length) warnings.push(`Host is running: ${running.join(', ')}`);
   }
 
-  return { warnings };
+  return { warnings, hitsRealRoot };
 }
 
 /**

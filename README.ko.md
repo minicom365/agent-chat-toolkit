@@ -126,7 +126,7 @@ transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User -
 
 - `--data-dir` **필수** — 암묵적 대상이 없습니다.
 - 기본은 **dry-run**, 쓰려면 `--apply`.
-- OS 기본 프로필에 쓰려면 `--i-know-what-im-doing` 없이는 거부.
+- OS 기본 프로필에 `--apply` 하려면 `--i-know-what-im-doing` 없이는 거부됩니다(dry-run 미리보기는 허용되고 경고를 출력합니다).
 - 에디터 실행 중에는 거부(다음 flush 때 인메모리 인덱스가 덮어씀). `--allow-running`으로만 우회.
 - 첫 쓰기 전에 `state.vscdb`를 타임스탬프 백업(`.bak-…`)으로 복사.
 - **원본은 절대 수정하지 않고, 아무것도 삭제하지 않습니다.**
@@ -180,7 +180,7 @@ const stats = computeStats(parsed, { capMs: 300_000 });
 ## 개발
 
 ```bash
-npm run verify     # 54 단위 스펙 + 46 샌드박스 검사
+npm run verify     # 55 단위 스펙 + 46 샌드박스 검사
 ```
 
 테스트는 완전히 합성된 트랜스크립트와 손으로 계산한 기댓값을 사용하므로, 모든 시간

@@ -321,13 +321,14 @@ export async function moveSession({
   const plan = { copies: [], indexMerges: [], backups: [], warnings: [], apply };
   const targetDb = path.join(targetStorageDir, 'state.vscdb');
 
-  await assertSafeWriteTarget({
+  const safety = await assertSafeWriteTarget({
     targetDir: dataDir ?? targetStorageDir,
     host: HOST_ID,
     apply,
     allowReal,
     allowRunning,
   });
+  plan.warnings.push(...safety.warnings);
 
   for (const [rel, srcPath] of [
     [CHAT_SESSIONS, source.statePath],

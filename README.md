@@ -214,7 +214,8 @@ transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User -
 
 - `--data-dir` is **required** — there is no implicit target.
 - Default is a **dry run**; `--apply` is required to write.
-- Writing into an OS-default profile is refused unless `--i-know-what-im-doing`.
+- `--apply` into an OS-default profile is refused unless `--i-know-what-im-doing` (the
+  dry run is still allowed, and warns you).
 - Writing while the editor is running is refused (it would clobber the in-memory index
   on the next flush) unless `--allow-running`.
 - `state.vscdb` is copied to a timestamped `.bak-…` before the first write.
@@ -304,7 +305,7 @@ format.
 ## Development
 
 ```bash
-npm run verify     # 54 unit specs + 46 sandbox checks
+npm run verify     # 55 unit specs + 46 sandbox checks
 ```
 
 The unit tests are built on fully synthetic transcripts with hand-computed
