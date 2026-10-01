@@ -70,15 +70,16 @@ export function coverageLines(coverage, st) {
   if (headLostSteps > 0) {
     out.push(
       st.red(
-        `  ⚠ the first ${fmtInt(headLostSteps)} step(s) are not in any readable log - ` +
-          'they exist only in the encrypted <id>.pb store.'
+        `  ⚠ the first ${fmtInt(headLostSteps)} step(s) are not in any readable log, and the store ` +
+          'no longer holds them either: they are marked CORTEX_STEP_STATUS_CLEARED, which means the ' +
+          'payload was deleted on disk. Use `agchat recover` for the rest of the conversation.'
       )
     );
   } else if (firstTextStep != null && stepSpan && firstTextStep > stepSpan.first) {
     out.push(
       st.yellow(
-        `  ⚠ steps ${fmtInt(stepSpan.first)}…${fmtInt(firstTextStep - 1)} are skeleton only ` +
-          '(the app cleared their text; the full copy is in the encrypted <id>.pb store).'
+        `  ⚠ steps ${fmtInt(stepSpan.first)}…${fmtInt(firstTextStep - 1)} have no text in the log. ` +
+          'Re-run with `agchat recover --session <id>` if the app still holds a live copy of them.'
       )
     );
   }

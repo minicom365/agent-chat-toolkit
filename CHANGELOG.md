@@ -4,6 +4,42 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-01
+
+### Fixed
+
+- **The store was described as a second copy. It is not.** `stats` and the
+  coverage block used to say the early steps "exist only in the encrypted
+  `<id>.pb` store" and that its "full copy" was there. Measured across all 100
+  `.pb` conversations in one instance: 185,999 of 259,414 steps (71.7%) are
+  `CORTEX_STEP_STATUS_CLEARED`, and **not one of them carries a payload in the
+  store either**. The wording now says the payload was deleted rather than
+  hidden, and points at `recover` for what does survive.
+
+### Measured (documented in `docs/ANTIGRAVITY.md`)
+
+- **The eviction is identical in both store generations.** 40 of 95 readable
+  `.pb` conversations have cleared steps; the law `CLEARED ⇒ no payload` held for
+  all 185,999 of them, the same as in the plaintext generation.
+- **It tracks size monotonically**, which is the point of the policy — 0% cleared
+  under 1 MB, 6% at 1–5 MB, 10% at 5–15 MB, 58% at 15–30 MB, 90% at 30–60 MB, 95%
+  above 60 MB. The 64 MiB reader ceiling and the eviction are one story.
+- **Tool calls survive clearing** where prose does not: 50,921 cleared steps
+  still carry a `toolCall`.
+- **The app's own logs are a second copy, but a shallow one.** Across the 40
+  affected conversations only 2,131 of 185,999 cleared steps (1.1%) still have
+  text in `transcript_full.jsonl` or `overview.txt`. Retention windows differ per
+  subsystem; the store is not the archive.
+- **Capacity accounting says nothing was relocated.** Fitting the `.pb`
+  population against itself (R²=0.751) gives 11,286 B per live step and 2,693 B
+  per cleared step, so **8,593 B is deleted per eviction → ~1.49 GB across the
+  profile** (2.02 GB if the plaintext generation's constants are used instead).
+  No location holds that: the three instance store directories are the stores
+  themselves, the 5.1 GB Chromium `WebStorage/CacheStorage` was checked and is a
+  `vscode-resource` file cache, the language-server dump is 306 MB and Crashpad
+  121 MB. The remaining possibility is unallocated sectors, which is forensics,
+  not a file search.
+
 ## [0.4.0] - 2026-10-01
 
 Two questions that turned out to have the same answer: where a conversation

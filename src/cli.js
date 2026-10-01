@@ -39,7 +39,7 @@ import { SafetyError, formatSafetyError } from './safety.js';
 import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.4.0';
+export const VERSION = '0.4.1';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.

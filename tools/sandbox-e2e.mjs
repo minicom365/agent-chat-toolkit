@@ -244,10 +244,12 @@ process.stdout.write('\ntruncated conversation: head recovery\n');
   });
 
   const human = run(['stats', '-s', info.sessionAgTruncated, '--host', 'antigravity'], env);
-  check('the text report warns that the early text lives in the encrypted store', () => {
+  check('the text report says the missing early text is gone rather than stored', () => {
     assert.equal(human.code, 0, human.err);
-    assert.ok(human.out.includes('skeleton only'), human.out);
-    assert.ok(human.out.includes('.pb'), 'the warning names the encrypted store');
+    // The store is not a second copy: cleared steps have no payload anywhere.
+    assert.ok(human.out.includes('CORTEX_STEP_STATUS_CLEARED'), human.out);
+    assert.ok(human.out.includes('deletes the payload on disk'), human.out);
+    assert.ok(!human.out.includes('full copy lives in the'), 'must not promise a copy that does not exist');
   });
 
   const list = run(['sessions', '--host', 'antigravity', '--limit', '10'], env);

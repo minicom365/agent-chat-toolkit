@@ -255,8 +255,9 @@ export function sanityWarnings(stats) {
   if (cov && cov.firstTextStep != null && cov.stepSpan && cov.firstTextStep > cov.stepSpan.first) {
     w.push(
       `Text survives only from step ${cov.firstTextStep} onward (${cov.textSteps} steps carry content). ` +
-        'Earlier steps are a skeleton: the app cleared their text and the full copy lives in the ' +
-        'encrypted <id>.pb store, which is not readable offline.'
+        'Earlier steps are not readable anywhere: the store marks them CORTEX_STEP_STATUS_CLEARED, ' +
+        'which deletes the payload on disk rather than hiding it. `agchat recover` will still export ' +
+        'whatever the store does hold.'
     );
   }
   return w;

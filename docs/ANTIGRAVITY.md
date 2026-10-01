@@ -111,13 +111,40 @@ conversation that is the difference between 2,077 visible events and 4,750:
 logs merged      transcript-full, chunk-full, transcript, chunk, overview
 steps (merged)   4,750 · step 0…9,307
 steps with text  1,342 (from step 6,380)
-  ⚠ steps 0…6,379 are skeleton only (the app cleared their text; the full copy is
-    in the encrypted <id>.pb store).
+  ⚠ steps 0…6,379 have no text in the log, and the store does not hold it
+    either: they are marked CORTEX_STEP_STATUS_CLEARED (payload deleted).
 ```
 
 The early steps come back as *skeleton*: you get the type, timestamp and — for
 the 248 steps that recorded a `tool_calls` field — which tool was invoked, but
-not the prose. `agchat sessions` marks these conversations in the `head` column:
+not the prose. **The encrypted store is not a second copy**: measured across all
+100 `.pb` conversations in one instance, 185,999 of 259,414 steps (71.7%) are
+`CLEARED`, and not one of them carries a payload in the store either.
+
+The app's own log files *are* a second copy, but a shallow one. Across the 40
+conversations that have cleared steps, only **2,131 of 185,999 cleared steps
+(1.1%)** still have their text in `transcript_full.jsonl` or `overview.txt` —
+almost all of them in a single conversation whose log reached back further than
+its store did. Retention windows differ per subsystem; the store is not the
+archive.
+
+The relationship is visible in the profile as a whole, and it is monotonic —
+bigger conversations are cleared harder:
+
+| store size | conversations | steps CLEARED |
+| --- | --- | --- |
+| 0–1 MB | 15 | 0% |
+| 1–5 MB | 19 | 6% |
+| 5–15 MB | 18 | 10% |
+| 15–30 MB | 29 | 58% |
+| 30–60 MB | 12 | 90% |
+| 60 MB+ | 2 | 95% |
+
+That is also why the 64 MiB reader ceiling and the eviction belong to the same
+story: eviction keeps a store near the ceiling, and what still exceeds it is the
+part that cannot be reached without paging.
+
+`agchat sessions` marks these conversations in the `head` column:
 `full` when the content transcript is complete, `skel` when the head survives
 only as a cleared skeleton, `lost` when no log covers the head at all, and
 `lock` when the content exists *only* inside the encrypted `.pb` store.

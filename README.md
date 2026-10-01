@@ -43,8 +43,9 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 > logs merged      transcript-full, chunk-full, transcript, chunk, overview
 > steps (merged)   4,750 · step 0…9,307
 > steps with text  1,342 (from step 6,380)
->   ⚠ steps 0…6,379 are skeleton only (the app cleared their text; the
->     full copy is in the encrypted <id>.pb store).
+>   ⚠ steps 0…6,379 have no text anywhere: the store marks them
+>     `CORTEX_STEP_STATUS_CLEARED`, which deletes the payload on disk rather than
+>     hiding it, and the log does not reach back that far.
 > ```
 >
 > The remaining text is in `conversations/<id>.pb`, which is **encrypted** (entropy
