@@ -1,0 +1,44 @@
+{
+  "name": "copilot-transcript-stats",
+  "version": "0.1.0",
+  "description": "Zero-dependency CLI that analyzes VS Code Copilot Chat agent transcripts: conversation statistics, tool-call breakdowns and timestamp-based effective development time estimation.",
+  "keywords": [
+    "copilot",
+    "copilot-chat",
+    "vscode",
+    "transcript",
+    "jsonl",
+    "agent",
+    "cli",
+    "statistics",
+    "time-tracking"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "transcript-stats": "bin/transcript-stats.js"
+  },
+  "main": "src/index.js",
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node bin/transcript-stats.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/minicom365/copilot-transcript-stats.git"
+  },
+  "bugs": {
+    "url": "https://github.com/minicom365/copilot-transcript-stats/issues"
+  },
+  "homepage": "https://github.com/minicom365/copilot-transcript-stats#readme"
+}

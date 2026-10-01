@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# logs & caches
+*.log
+npm-debug.log*
+.npm/
+
+# test / coverage output
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# local analysis output (transcripts are personal data - never commit exports)
+out/
+reports/
+*.transcript.json
+*.report.md
+
+# editors
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# os
+.DS_Store
+Thumbs.db
+desktop.ini
