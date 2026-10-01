@@ -24,12 +24,13 @@ import {
 import { detect, formatList } from './formats/index.js';
 import { HOSTS, allSessions, findSession, inventory, byId as hostById } from './hosts/index.js';
 import { moveSession } from './hosts/vscode.js';
+import { countSteps, defaultLsBinary, recoverTrajectory } from './hosts/antigravity-recover.js';
 import { LEVEL_DEFAULT_CHARS, levelName, searchSessions } from './search.js';
 import { SafetyError, formatSafetyError } from './safety.js';
 import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.3.2';
+export const VERSION = '0.3.3';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
@@ -47,6 +48,7 @@ COMMANDS
   find                   keyword search across hosts, with detail levels 1-4
   show                   print one conversation (-s <id>) at a detail level
   move                   copy a VS Code conversation into another workspace storage
+  recover                export the FULL encrypted store of an Antigravity conversation
   stats                  statistics for one transcript (default)
   time                   effective development time detail
   tools                  tool usage breakdown
@@ -83,6 +85,13 @@ MOVING A CONVERSATION (VS Code only)
       --apply               actually write (default is a dry run)
       --i-know-what-im-doing  allow writing into a live data directory
       --allow-running       allow writing while the host application is running
+
+RECOVERING A CONVERSATION (Antigravity, via the language server)
+  -s, --session <id>        conversation to export (its .pb store is decrypted)
+      --out <file>          where to write the trajectory JSON (default <id>.json)
+      --ls-binary <path>    language server binary (else ANTIGRAVITY_LS_PATH / auto)
+  NOTE: a few very large stores are corrupt (server returns 500); listing is
+        capped at ~100 summaries, so recovery is per-id and may miss nothing.
 
 FILTERS (query / timeline / export)
       --type <t>          event type, repeatable / comma separated
@@ -140,6 +149,8 @@ export async function main(argv) {
         return await cmdShow(opts, st);
       case 'move':
         return await cmdMove(opts, st);
+      case 'recover':
+        return await cmdRecover(opts, st);
       case 'stats':
       case 'time':
       case 'tools':
@@ -368,6 +379,46 @@ async function resolveStorageTarget(dataDir, source, to) {
     );
   }
   return null;
+}
+
+/* --------------------------------------------------------------- recover */
+
+/**
+ * Export the *complete* trajectory of a conversation by driving the bundled
+ * language server. Unlike `show`/`stats` (which read the lossy JSONL logs),
+ * this recovers the full encrypted store — including the early steps the app's
+ * own UI stops showing once a conversation grows.
+ */
+async function cmdRecover(opts, st) {
+  if (!opts.session) throw new SafetyError('recover needs --session <id>.', 'NO_SESSION');
+
+  const sessions = await allSessions({ hosts: ['antigravity'], roots: opts.root });
+  const one = findSession(sessions, opts.session);
+  if (!one) throw new Error(`No conversation matched --session ${opts.session}`);
+  if (one.host !== 'antigravity') {
+    throw new Error(`recover only supports the antigravity host (got ${one.host}).`);
+  }
+
+  const binary = opts.lsBinary || defaultLsBinary();
+  if (!binary) {
+    throw new Error(
+      'Antigravity language server not found. Set ANTIGRAVITY_LS_PATH or pass --ls-binary.'
+    );
+  }
+  const appDataName = path.basename(one.instanceDir || '');
+
+  process.stderr.write(
+    `recovering ${one.id.slice(0, 8)}… from ${appDataName} via ${path.basename(binary)}\n`
+  );
+  const text = await recoverTrajectory({ id: one.id, binary, appDataName });
+  const steps = countSteps(text);
+
+  const out = opts.out || `${one.id}.json`;
+  await fsp.writeFile(out, text, 'utf8');
+  process.stderr.write(
+    `wrote ${path.resolve(out)} (${steps} steps, ${(Buffer.byteLength(text) / 1048576).toFixed(1)} MB)\n`
+  );
+  return 0;
 }
 
 /* --------------------------------------------------------------- analysis */
@@ -719,6 +770,9 @@ export function parseArgs(argv) {
       case '--i-know-what-im-doing':
       case '--force-real':
         opts.allowReal = true;
+        break;
+      case '--ls-binary':
+        opts.lsBinary = take(a);
         break;
       case '--allow-running':
         opts.allowRunning = true;

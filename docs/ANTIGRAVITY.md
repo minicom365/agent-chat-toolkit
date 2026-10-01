@@ -95,7 +95,7 @@ all. Measured over all 350 conversations:
 
 **207 conversations exist only as encrypted `.pb`.** For those, no transcript,
 no overview, and no offline key — `agchat sessions` marks them `lock` in the
-`head` column precisely so this is visible rather than silently absent.
+`head` column, and `agchat recover` exports them through the language server.
 
 Six further `.pb` files (3 conversations, duplicated across two instances) are
 27–48 MB of **all zero bytes**: allocated but never written, i.e. content that
@@ -168,25 +168,57 @@ Checked on a real Windows install, all negative:
 - The encryption scheme has changed across Antigravity releases, so a decryption
   routine written for one version does not carry over.
 
-**Practical consequence:** the missing text of a truncated conversation is not
-recoverable offline. The two routes that do work are the app's own reader (open
-the conversation, or drive the bundled language server) and the `overview.txt`
-skeleton that `agchat` already merges. Everything this tool reports from a
-conversation with a `skel`/`lost` head is a **lower bound** on that conversation,
-and `agchat stats` says so in its warnings rather than presenting a partial total
-as the whole story.
+**Practical consequence:** the key is not derivable offline, but it does not
+need to be — the bundled language server holds it. `agchat recover` exports the
+full trajectory through that server (see "Exporting a `lock`ed conversation").
+The `overview.txt` merge remains the only offline source, and a conversation
+with a `skel`/`lost` head reported by `stats` is still a **lower bound** until
+`recover` is run.
 
 ## Exporting a `lock`ed conversation
 
-For the 207 conversations whose content is only in a `.pb` store there are two
-routes, and only two:
+The key is not derivable offline, but the bundled language server holds it and
+will decrypt any `.pb` it can load. `agchat` drives that server directly, so a
+conversation that is unreadable in the app UI can still be exported in full:
 
-1. **The app's own reader.** Open the conversation in Antigravity; its language
-   server decrypts on demand. A tool that needs these bytes should drive that
-   server (`jetski/language_server` speaks protobuf envelopes over a WebSocket),
-   not the filesystem.
-2. **`overview.txt`, when it exists.** That is the skeleton path `agchat` already
-   merges, listed above.
+```
+$ agchat recover --session 44166d34
+recovering 44166d34… from antigravity via language_server.exe
+wrote C:\...\44166d34-….json (9308 steps, 56.9 MB)
+```
+
+What this does, in order:
+
+1. Launches the shipped `language_server` binary standalone
+   (`-standalone -persistent_mode -override_ide_name=antigravity
+   --app_data_dir <instance>`), with stdin closed so it never blocks on the
+   OAuth prompt — local trajectory reads need no sign-in.
+2. Waits for the `listening on random port at N for HTTP` line. **That line is
+   the plain-HTTP port; the line that precedes it is the `HTTPS (gRPC)` port and
+   must not be picked.**
+3. POSTs `{"cascadeId":"<id>"}` to
+   `/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory` and
+   writes the raw JSON trajectory.
+
+Verified on a real 9,308-step conversation whose `transcript_full.jsonl` had
+lost 78% of its head: the endpoint returned **all 9,308 steps** (56.9 MB) in
+2.5 s, matching the catalog's `step_count` exactly.
+
+Two limitations observed in practice, and not specific to `agchat`:
+
+1. **A few very large stores are corrupt.** The server answers HTTP 500
+   (`trajectory … not found in any store`) and the reproduction is not
+   deterministic — the same conversation can work on one run and fail on the
+   next. Those stores are damaged on disk, not merely unreadable.
+2. **`GetAllCascadeTrajectories` is capped at about 100 summaries.** Beyond that
+   the list goes stale, which is why `recover` fetches per id rather than via the
+   list endpoint, and why `agchat sessions` still enumerates the filesystem.
+
+`--app_data_dir` matters and is easy to get wrong: the server **defaults to
+`antigravity-ide`**, so a conversation in the `antigravity` instance is
+"not found" unless the flag points there. `recover` derives it from the
+session's own instance directory, which is the fix for the most common false
+"data is gone" verdict.
 
 The writer is identifiable in the shipped binary, which is what makes the scheme
 versioned rather than merely unknown:

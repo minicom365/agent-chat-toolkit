@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-10-01
+
+### Added
+
+- **`agchat recover --session <id>`** — exports the *complete* trajectory of an
+  Antigravity conversation by driving the bundled language server. The `.pb` key
+  is not on disk, but the server holds it and decrypts on demand, so this recovers
+  the early steps the app's own UI stops showing once a conversation grows.
+  Verified on a real 9,308-step conversation whose `transcript_full.jsonl` lost
+  78% of its head: the endpoint returned **all 9,308 steps** (56.9 MB) in 2.5 s.
+- `src/hosts/antigravity-recover.js` — `defaultLsBinary()`, `launchLanguageServer()`,
+  `postJson()`, `recoverTrajectory()`, `countSteps()`. Zero dependencies.
+
+### Fixed
+
+- The port parser now skips the `listening … for HTTPS (gRPC)` line. The phrase
+  `for HTTP` is a prefix of `for HTTPS`, so the naive regex captured the gRPC
+  port and the request failed with "Client sent an HTTP request to an HTTPS
+  server".
+- `recover` derives `--app_data_dir` from the conversation's own instance. The
+  server **defaults to `antigravity-ide`**, so a conversation in `antigravity`
+  otherwise reads as "trajectory not found in any store".
+
+### Documented limitations (observed, not specific to this tool)
+
+- A few very large stores are corrupt: HTTP 500, non-deterministic reproduction.
+- `GetAllCascadeTrajectories` is capped at ~100 summaries, so listing goes stale;
+  `recover` fetches per id instead.
+
 ## [0.3.2] - 2026-10-01
 
 A follow-up investigation of the two external references turned up one fact that

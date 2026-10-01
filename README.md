@@ -56,6 +56,11 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 > ordinary protobuf (2026-08-03 onward). One real install holds **294 `.pb`
 > conversations, 207 of which have no log at all** — for those, the only copy is
 > the ciphertext, and `agchat sessions` marks them `lock`.
+>
+> `lock` does not mean lost: `agchat recover --session <id>` launches the bundled
+> language server and exports the whole trajectory — on a real 9,308-step
+> conversation whose transcript log had lost 78% of its head, it returned all
+> 9,308 steps (56.9 MB).
 
 ---
 
@@ -67,6 +72,7 @@ missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 | **`find`** | keyword search with four detail levels, so tool noise never buries the decision you are looking for |
 | **`show`** | replay one conversation at the level of detail you need |
 | **`move`** | migrate a VS Code conversation into another workspace's storage, with backups and a dry-run default |
+| **`recover`** | export the *full* encrypted store of an Antigravity conversation through its language server |
 | **`stats` / `time` / `tools`** | conversation statistics, tool usage and a defensible estimate of effective development time |
 | **`query` / `timeline` / `export`** | raw event access as text, JSON, Markdown or CSV |
 

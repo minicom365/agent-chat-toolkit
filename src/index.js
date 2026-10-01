@@ -49,6 +49,7 @@ export {
 export { HOSTS, allSessions, findSession, inventory, hostIds } from './hosts/index.js';
 export { vscode as vscodeHost, antigravity as antigravityHost } from './hosts/index.js';
 export { logSourcesFor, stepRangeOf } from './hosts/antigravity.js';
+export { countSteps, defaultLsBinary, recoverTrajectory, launchLanguageServer, postJson, LS_ENDPOINT } from './hosts/antigravity-recover.js';
 export { moveSession } from './hosts/vscode.js';
 export {
   searchSessions,
