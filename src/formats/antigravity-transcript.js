@@ -31,6 +31,13 @@
 export const FORMAT_ID = 'antigravity-transcript';
 export const FORMAT_DESCRIPTION = 'Antigravity Brain transcript (JSONL step log)';
 
+/**
+ * Property that uniquely identifies an event inside one conversation. Several log
+ * files describe the same conversation (see `logSourcesFor`), so the parser needs
+ * a stable key to merge duplicates.
+ */
+export const ORDER_KEY = 'stepIndex';
+
 export const ARGS_TEXT_CAP = 8000;
 export const OBSERVATION_CAP = 4000;
 

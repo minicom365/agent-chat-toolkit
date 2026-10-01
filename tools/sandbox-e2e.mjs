@@ -93,10 +93,10 @@ process.stdout.write('discovery\n');
   const vscode = inv.rows.find((x) => x.host === 'vscode');
   const ag = inv.rows.find((x) => x.host === 'antigravity');
   check('vscode host sees 2 conversations', () => assert.equal(vscode.sessionCount, 2));
-  check('antigravity host sees all three instance conversations', () => assert.equal(ag.sessionCount, 4));
+  check('antigravity host sees every instance conversation', () => assert.equal(ag.sessionCount, 5));
   check('every session has a transcript log', () => {
     assert.equal(vscode.withTranscript, 2);
-    assert.equal(ag.withTranscript, 4);
+    assert.equal(ag.withTranscript, 5);
   });
 }
 
@@ -109,7 +109,7 @@ if (!info.sqlite) {
   check('sessions --json exits 0', () => assert.equal(r.code, 0, r.err));
   const list = JSON.parse(r.out);
   check('catalog merges both hosts', () => {
-    assert.equal(list.length, 6);
+    assert.equal(list.length, 7);
     assert.deepEqual([...new Set(list.map((s) => s.host))].sort(), ['antigravity', 'vscode']);
   });
   if (info.sqlite) {
@@ -200,6 +200,65 @@ process.stdout.write('\nantigravity instances and index\n');
     assert.equal(one.code, 0, one.err);
     assert.ok(one.out.includes('The IDE build keeps its own conversations.'));
   });
+}
+
+process.stdout.write('\ntruncated conversation: head recovery\n');
+{
+  const r = run(['sessions', '--host', 'antigravity', '--json'], env);
+  check('a truncated conversation is discovered', () => assert.equal(r.code, 0, r.err));
+  const byId = new Map(JSON.parse(r.out).map((s) => [s.id, s]));
+
+  check('its head loss is measured against the merged step range', () => {
+    const s = byId.get(info.sessionAgTruncated);
+    assert.equal(s.headLostSteps, info.agTruncatedHeadSteps, 'the content transcript lost its head');
+    assert.equal(s.unrecoverableHeadSteps, 0, 'but overview.txt still covers step 0');
+    assert.equal(s.stepSpan.first, 0);
+    assert.equal(s.hasOverview, true);
+  });
+
+  check('every log for the conversation is listed, overview included', () => {
+    const s = byId.get(info.sessionAgTruncated);
+    assert.deepEqual(s.logSourceKinds, ['transcript-full', 'overview']);
+  });
+
+  check('a conversation without a transcript has no head flag', () => {
+    const s = byId.get(info.sessionAgTruncated);
+    assert.ok(s.headLostSteps >= 0);
+    assert.equal(byId.get(info.sessionAntigravity).hasOverview, false);
+  });
+
+  const stats = run(['stats', '-s', info.sessionAgTruncated, '--host', 'antigravity', '--json'], env);
+  check('stats merges the logs for the truncated conversation', () => assert.equal(stats.code, 0, stats.err));
+  const s = JSON.parse(stats.out);
+  check('the merged parse reports coverage', () => {
+    assert.ok(s.coverage, 'coverage should be present for a multi-source parse');
+    assert.equal(s.coverage.stepSpan.first, 0, 'the overview restores the head of the timeline');
+    assert.ok(s.coverage.sources.length >= 2, 'both logs are reported as sources');
+  });
+  check('the cleared head is excluded from the text totals', () => {
+    assert.ok(
+      s.coverage.textSteps < s.coverage.steps,
+      `only ${s.coverage.textSteps} of ${s.coverage.steps} steps still carry text`
+    );
+    assert.ok(s.coverage.firstTextStep > s.coverage.stepSpan.first);
+  });
+
+  const human = run(['stats', '-s', info.sessionAgTruncated, '--host', 'antigravity'], env);
+  check('the text report warns that the early text lives in the encrypted store', () => {
+    assert.equal(human.code, 0, human.err);
+    assert.ok(human.out.includes('skeleton only'), human.out);
+    assert.ok(human.out.includes('.pb'), 'the warning names the encrypted store');
+  });
+
+  const list = run(['sessions', '--host', 'antigravity', '--limit', '10'], env);
+  check('the session list shows a head column', () => {
+    assert.equal(list.code, 0, list.err);
+    assert.ok(list.out.includes('head'), list.out);
+    assert.ok(list.out.includes('skel'), 'a head recovered from the overview reads as skel');
+  });
+
+  const early = run(['query', '-s', info.sessionAgTruncated, '--role', 'tool', '--host', 'antigravity'], env);
+  check('early tool calls are readable through the merge', () => assert.equal(early.code, 0, early.err));
 }
 
 process.stdout.write('\nsearch\n');{

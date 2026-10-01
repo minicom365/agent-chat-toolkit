@@ -199,3 +199,158 @@ export async function foldTranscripts(files, reducer, opts = {}) {
     reducer(parsed);
   }
 }
+
+/* ------------------------------------------------------- multi-source merge */
+
+/** Higher wins when two sources describe the same event equally well. */
+const DEFAULT_PRIORITY = 5;
+
+/**
+ * How much information an event carries. Used to pick the best copy of a step
+ * when a conversation is spread over several logs — a content-elided overview
+ * entry scores 0 and can never displace a real transcript entry.
+ */
+export function eventWeight(ev) {
+  return (
+    (ev.text?.length ?? 0) +
+    (ev.reasoningChars ?? 0) +
+    (ev.observationChars ?? 0) +
+    (ev.argsText?.length ?? 0) +
+    (ev.toolName ? 1 : 0) +
+    (ev.requestCount ?? 0)
+  );
+}
+
+function normaliseSources(sources) {
+  const list = (Array.isArray(sources) ? sources : [sources]).filter(Boolean);
+  return list.map((s) =>
+    typeof s === 'string'
+      ? { path: s, kind: 'primary', priority: DEFAULT_PRIORITY }
+      : { priority: DEFAULT_PRIORITY, kind: 'primary', ...s }
+  );
+}
+
+/**
+ * Parse several log files that describe the *same* conversation and merge them
+ * into one event list.
+ *
+ * Antigravity writes a conversation to more than one place and each copy can be
+ * incomplete: `transcript_full.jsonl` drops the head of very long sessions,
+ * `overview.txt` keeps the whole step skeleton but elides the text of everything
+ * except the newest steps, and `chunks/…` holds only the newest slice. Merging
+ * them recovers the union — which is how the early tool calls of a truncated
+ * session can still be listed.
+ *
+ * Formats that expose an `ORDER_KEY` are merged by that key (richest copy wins,
+ * then highest priority); every other format is simply concatenated in order.
+ *
+ * @param {Array<string|{path:string,kind?:string,priority?:number}>} sources richest first
+ */
+export async function parseTranscriptSet(sources, opts = {}) {
+  const list = normaliseSources(sources);
+  if (!list.length) {
+    const err = new Error('parseTranscriptSet: no sources given');
+    err.code = 'EFORMAT';
+    throw err;
+  }
+
+  const parsedList = [];
+  for (const src of list) {
+    // eslint-disable-next-line no-await-in-loop
+    const parsed = await parseTranscript(src.path, opts);
+    parsedList.push({ src, parsed });
+  }
+
+  const format = parsedList[0].parsed.format;
+  const adapter = formats.byId(format);
+  const orderKey = adapter && typeof adapter.ORDER_KEY === 'string' ? adapter.ORDER_KEY : null;
+
+  const events = orderKey
+    ? mergeKeyedEvents(parsedList, orderKey)
+    : parsedList.flatMap((p) => p.parsed.events);
+
+  events.forEach((ev, i) => {
+    ev.i = i;
+  });
+
+  const bytes = parsedList.reduce((sum, p) => sum + p.parsed.bytes, 0);
+  const totalLines = parsedList.reduce((sum, p) => sum + p.parsed.totalLines, 0);
+  const parseErrors = parsedList.reduce((sum, p) => sum + p.parsed.parseErrors, 0);
+
+  const sources1 = parsedList.map(({ src, parsed }) => ({
+    file: src.path,
+    kind: src.kind,
+    priority: src.priority,
+    bytes: parsed.bytes,
+    lines: parsed.totalLines,
+    errors: parsed.parseErrors,
+    events: parsed.events.length,
+    steps: stepSpanOf(parsed.events, orderKey),
+  }));
+
+  return {
+    file: parsedList[0].parsed.file,
+    files: parsedList.map((p) => p.parsed.file),
+    bytes,
+    totalLines,
+    parseErrors,
+    format,
+    events,
+    sources: sources1,
+    coverage: coverageOf(events, { orderKey, sources: sources1 }),
+  };
+}
+
+function mergeKeyedEvents(parsedList, orderKey) {
+  const best = new Map();
+  for (const { src, parsed } of parsedList) {
+    for (const ev of parsed.events) {
+      const key = ev[orderKey];
+      if (key == null) continue;
+      const weight = eventWeight(ev);
+      const prev = best.get(key);
+      if (!prev) {
+        best.set(key, { ev, weight, priority: src.priority ?? 0 });
+      } else if (weight > prev.weight || (weight === prev.weight && (src.priority ?? 0) > prev.priority)) {
+        prev.ev = ev;
+        prev.weight = weight;
+        prev.priority = src.priority ?? 0;
+      }
+    }
+  }
+  return [...best.values()]
+    .sort((a, b) => Number(a.ev[orderKey]) - Number(b.ev[orderKey]))
+    .map((r) => r.ev);
+}
+
+function stepSpanOf(events, orderKey) {
+  if (!orderKey) return null;
+  const steps = events.map((e) => Number(e[orderKey])).filter((n) => Number.isFinite(n));
+  return steps.length ? { first: Math.min(...steps), last: Math.max(...steps) } : null;
+}
+
+/**
+ * Describe how much of a conversation is actually readable.
+ *
+ * `headLostSteps` is the number of leading steps missing from the events (0 when
+ * the log is complete); `textSteps`/`firstTextStep` tell how much real prose and
+ * tool output survived, because a recovered skeleton step has no text at all.
+ */
+export function coverageOf(events, { orderKey = null, sources = [] } = {}) {
+  const span = stepSpanOf(events, orderKey);
+  const withText = events.filter((e) => e.text || e.observationChars);
+  const textSteps = withText.map((e) => Number(e[orderKey])).filter((n) => Number.isFinite(n));
+  return {
+    sources,
+    stepSpan: span,
+    /** merged steps (a conversation split over several logs counts each step once) */
+    steps: events.length,
+    /** steps that carry real text or tool output; a `CLEARED` skeleton step carries none */
+    textSteps: withText.length,
+    firstTextStep: textSteps.length ? Math.min(...textSteps) : null,
+    lastTextStep: textSteps.length ? Math.max(...textSteps) : null,
+    humanChunks: events.filter((e) => e.role === 'user').length,
+    /** leading steps absent from every log */
+    headLostSteps: span && span.first > 0 ? span.first : 0,
+  };
+}

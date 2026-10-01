@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { findTranscriptFiles, listTranscripts, userDataDirs } from './discover.js';
-import { parseTranscript, readHead } from './parse.js';
+import { parseTranscript, parseTranscriptSet, readHead } from './parse.js';
 import { computeStats, sanityWarnings } from './stats.js';
 import { DEFAULT_BREAK_MS, DEFAULT_CAP_MS, analyzeTiming, capLabel } from './timing.js';
 import { buildFilter, queryEvents } from './query.js';
@@ -29,7 +29,7 @@ import { SafetyError, formatSafetyError } from './safety.js';
 import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.3.1';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
@@ -386,9 +386,10 @@ async function cmdAnalysis(command, opts, st) {
   const needsEvents = command === 'timeline' || command === 'query';
   const analyses = [];
   const allEvents = [];
+  const sourceMap = await sessionSources(opts);
   for (const file of targets) {
     // eslint-disable-next-line no-await-in-loop
-    const parsed = await parseTranscript(file, { keepData: false });
+    const parsed = await parseTarget(file, opts, sourceMap);
     if (needsEvents) allEvents.push(...parsed.events);
     // eslint-disable-next-line no-await-in-loop
     analyses.push(computeStats(parsed, timingOpts(opts)));
@@ -432,9 +433,10 @@ async function cmdAnalysis(command, opts, st) {
 async function cmdExport(targets, opts) {
   const format = opts.format ?? (opts.json ? 'json' : opts.csv ? 'csv' : 'md');
   const chunks = [];
+  const sourceMap = await sessionSources(opts);
   for (const file of targets) {
     // eslint-disable-next-line no-await-in-loop
-    const parsed = await parseTranscript(file, { keepData: false });
+    const parsed = await parseTarget(file, opts, sourceMap);
     if (format === 'csv') {
       chunks.push(exportCsv(parsed.events));
     } else if (format === 'json') {
@@ -447,6 +449,35 @@ async function cmdExport(targets, opts) {
 }
 
 /* ------------------------------------------------------------- resolution */
+
+/**
+ * Map each primary transcript path to the full set of logs that describe the same
+ * conversation. Antigravity splits one conversation over several files, so acting
+ * on `transcript_full.jsonl` alone silently drops the head of long sessions.
+ */
+async function sessionSources(opts) {
+  const map = new Map();
+  try {
+    const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
+    for (const s of sessions) {
+      if (s.transcriptPath && Array.isArray(s.logSources) && s.logSources.length) {
+        map.set(path.resolve(s.transcriptPath), s.logSources);
+      }
+    }
+  } catch {
+    /* discovery is best-effort here; fall back to single-file parsing */
+  }
+  return map;
+}
+
+/** Parse one transcript target, merging every log that belongs to the session. */
+async function parseTarget(file, opts, sourceMap) {
+  const sources = sourceMap?.get(path.resolve(file));
+  if (sources && sources.length > 1) {
+    return parseTranscriptSet(sources, { keepData: false });
+  }
+  return parseTranscript(file, { keepData: false });
+}
 
 /** Resolve the transcript file(s) a command should act on. */
 async function resolveTranscripts(opts) {
@@ -520,6 +551,8 @@ function mergeStats(list) {
   base.byType = [];
   base.top = { prompts: [], replies: [], toolArgs: [], observations: [] };
   base.formats = [...new Set(list.map((s) => s.format))];
+  // Coverage describes one conversation; it is meaningless once several are summed.
+  base.coverage = list.length === 1 ? (list[0].coverage ?? null) : null;
 
   const toolMap = new Map();
   const reqMap = new Map();

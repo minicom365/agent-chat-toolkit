@@ -64,6 +64,18 @@ const AG_BACKUP = {
   workspace: 'file:///home/sandbox/projects/delta',
 };
 
+/**
+ * A long conversation whose content log lost its head. The early steps survive
+ * only as a `CLEARED` skeleton in `overview.txt`, which is how the real app
+ * behaves once a session outgrows the transcript file.
+ */
+const AG_TRUNCATED = {
+  id: '77777777-7777-4777-8777-777777777777',
+  title: 'Sandbox truncated conversation',
+  workspace: 'file:///home/sandbox/projects/epsilon',
+};
+const AG_TRUNCATED_HEAD_STEPS = 4;
+
 const STORAGE_A = 'aaaaaaaa11111111';
 const STORAGE_B = 'bbbbbbbb22222222';
 
@@ -227,6 +239,37 @@ export function antigravityTranscript({ id, ask, final }) {
   return lines.join('');
 }
 
+/**
+ * A conversation whose content transcript lost its head, exactly like a long
+ * real session: `transcript_full.jsonl` starts at `headLostSteps` while
+ * `overview.txt` still describes every step from 0 (with the older text cleared).
+ */
+export function antigravityTruncated({ id, ask, final, headLostSteps }) {
+  const full = antigravityTranscript({ id, ask, final });
+  const steps = full
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+
+  const skeleton = steps
+    .filter((s) => s.step_index < headLostSteps)
+    .map((s) => {
+      const elided = { ...s, status: 'CLEARED' };
+      delete elided.content;
+      delete elided.thinking;
+      return `${JSON.stringify(elided)}\n`;
+    })
+    .join('');
+
+  const tail = steps.filter((s) => s.step_index >= headLostSteps);
+  // Keep the tail structurally intact but renumber it so the gap is realistic.
+  const shifted = tail
+    .map((s, n) => `${JSON.stringify({ ...s, step_index: headLostSteps + n * 4 })}\n`)
+    .join('');
+
+  return { overview: skeleton + shifted, transcript: shifted };
+}
+
 function antigravitySummaryDb(file, rows) {
   if (!sqliteAvailable()) return false;
   const db = new DatabaseSync(file);
@@ -378,6 +421,19 @@ export async function makeSandbox(outDir, { force = false } = {}) {
   await fsp.writeFile(path.join(agDir, 'conversations', `${AG_LEGACY.id}.db`), 'sandbox-legacy-store\n');
   await fsp.writeFile(path.join(agDir, 'conversations', `${ANTIGRAVITY.id}.pb`), 'sandbox-current-store\n');
 
+  // --- third conversation: content log truncated, head survives as a skeleton ---
+  const truncLogs = path.join(agDir, 'brain', AG_TRUNCATED.id, '.system_generated', 'logs');
+  await fsp.mkdir(truncLogs, { recursive: true });
+  const truncated = antigravityTruncated({
+    id: AG_TRUNCATED.id,
+    ask: 'This conversation lost the head of its step log.',
+    final: 'Only the tail steps still carry their text.',
+    headLostSteps: AG_TRUNCATED_HEAD_STEPS,
+  });
+  await fsp.writeFile(path.join(truncLogs, 'overview.txt'), truncated.overview);
+  await fsp.writeFile(path.join(truncLogs, 'transcript_full.jsonl'), truncated.transcript);
+  await fsp.writeFile(path.join(agDir, 'conversations', `${AG_TRUNCATED.id}.pb`), 'sandbox-truncated-store\n');
+
   const wroteDb = antigravitySummaryDb(path.join(agDir, 'conversation_summaries.db'), [
     [
       ANTIGRAVITY.id,
@@ -401,6 +457,18 @@ export async function makeSandbox(outDir, { force = false } = {}) {
       'CASCADE_RUN_STATUS_IDLE',
       'antigravity',
       '2026-01-04 09:00:00.0000000+00:00',
+      0,
+    ],
+    [
+      AG_TRUNCATED.id,
+      AG_TRUNCATED.title,
+      'This conversation lost the head of its step log.',
+      31,
+      '2026-01-03 09:04:00.0000000+00:00',
+      JSON.stringify([AG_TRUNCATED.workspace]),
+      'CASCADE_RUN_STATUS_IDLE',
+      'antigravity',
+      '2026-01-03 09:00:00.0000000+00:00',
       0,
     ],
   ]);
@@ -450,7 +518,7 @@ export async function makeSandbox(outDir, { force = false } = {}) {
   // --- app profiles: the state that decides what the sidebar shows ---
   const profileRoot = path.join(root, 'profiles');
   const profiles = [
-    { product: 'Antigravity', ids: [ANTIGRAVITY.id] },
+    { product: 'Antigravity', ids: [ANTIGRAVITY.id, AG_TRUNCATED.id] },
     { product: 'Antigravity IDE', ids: [AG_IDE.id] },
   ];
   if (sqliteAvailable()) {
@@ -462,7 +530,7 @@ export async function makeSandbox(outDir, { force = false } = {}) {
       db.close();
       const payload = buildSidebarIndex(
         p.ids.map((id, n) => {
-          const meta = [ANTIGRAVITY, AG_LEGACY, AG_IDE, AG_BACKUP].find((x) => x.id === id) ?? {};
+          const meta = [ANTIGRAVITY, AG_LEGACY, AG_IDE, AG_BACKUP, AG_TRUNCATED].find((x) => x.id === id) ?? {};
           return {
             id,
             title: meta.title,
@@ -494,6 +562,8 @@ export async function makeSandbox(outDir, { force = false } = {}) {
     sessionAgLegacy: AG_LEGACY.id,
     sessionAgIde: AG_IDE.id,
     sessionAgBackup: AG_BACKUP.id,
+    sessionAgTruncated: AG_TRUNCATED.id,
+    agTruncatedHeadSteps: AG_TRUNCATED_HEAD_STEPS,
     sqlite: sqliteAvailable(),
     antigravityCatalog: wroteDb,
   };

@@ -77,16 +77,22 @@ and never assumes one is present.
 ## Antigravity step log
 
 ```
-~/.gemini/<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl   (untruncated, preferred)
-~/.gemini/<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl        (truncated)
+~/.gemini/<appDataDir>/brain/<conversationId>/.system_generated/logs/overview.txt           full skeleton, text elided for all but the newest steps
+~/.gemini/<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl   content log (can lose the head)
+~/.gemini/<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl        capped twin of the above
+~/.gemini/<appDataDir>/brain/<conversationId>/.system_generated/logs/chunks/<kind>/NNNN.jsonl newest slice
 ```
+
+All four use the same schema. Read together they describe one conversation; read
+individually, none of them does. `agchat` merges them by `step_index` (see
+"Merging the logs" below).
 
 ```jsonc
 {
   "step_index": 1,
   "source": "MODEL",              // MODEL | SYSTEM | USER_EXPLICIT | USER_IMPLICIT
   "type": "PLANNER_RESPONSE",
-  "status": "DONE",               // DONE | RUNNING | ERROR
+  "status": "DONE",               // DONE | RUNNING | ERROR | CLEARED
   "created_at": "2026-09-28T06:01:26Z",
   "content": "…",                 // prose for USER_INPUT / PLANNER_RESPONSE, tool output otherwise
   "thinking": "…",                // PLANNER_RESPONSE only
@@ -95,6 +101,27 @@ and never assumes one is present.
   "truncated_fields": […]         // present when the producer clipped something
 }
 ```
+
+### Merging the logs
+
+The app writes a conversation to several places and each copy can be incomplete:
+
+| file | what it holds | how it fails |
+| --- | --- | --- |
+| `transcript_full.jsonl` | the content log | **can lose the head** — one real 9,308-step session started at step 7,231 |
+| `transcript.jsonl` | the same, capped | a subset |
+| `chunks/**/NNNNNNNN.jsonl` | the newest slice | only the tail |
+| `overview.txt` | the **full** step skeleton | its `content` is elided (`status: "CLEARED"`) except for the newest steps |
+
+`parseTranscriptSet()` parses every source, then keeps the richest copy of each
+`step_index` (most text/args/observation wins, ties broken by source priority:
+`transcript-full` > `transcript`/`chunk-full` > `chunk`/`overview`). A cleared
+skeleton entry therefore scores 0 and can never displace a real one.
+
+The merge restores the early *timeline* and tool calls of a truncated session, but
+not its prose: `coverageOf()` reports `steps` and `textSteps` separately, and
+`stats` warns when the two disagree. The missing text is in
+`conversations/<id>.pb`, which is encrypted and not readable offline.
 
 ### Event types
 
@@ -136,8 +163,13 @@ cannot steal the next one.
    human's words.
 6. **`CONVERSATION_HISTORY` is a marker with no `content`.** Titles live elsewhere
    (`conversation_summaries.db`, `annotations/<id>.pbtxt`).
-7. **`transcript_full.jsonl` is a superset** of `transcript.jsonl`; the catalog can also
-   reference conversations whose log is absent entirely.
+7. **`transcript_full.jsonl` is a superset of `transcript.jsonl`, but not of the
+   conversation.** It can start part-way through (see "Merging the logs"), and the
+   catalog can also reference conversations whose log is absent entirely. Check
+   `head` in `sessions` or the coverage block in `stats` before quoting a total.
+8. **`CLEARED` means the text was dropped.** The step still exists — type, timestamp
+   and `tool_calls` survive — which is why a truncated conversation can still be
+   read as a timeline.
 
 ---
 

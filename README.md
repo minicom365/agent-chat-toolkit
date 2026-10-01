@@ -17,19 +17,39 @@ questions that actually matter:
 ```
 $ agchat sessions --limit 6
 
- #  host         instance            updated              idx  store  index   title                          project                session   log       size
---  -----------  ------------------  -------------------  ---  -----  ------  -----------------------------  ---------------------  --------  --------  ------
- 1  vscode                            2026-10-01 09:12:41  ?    -             Refactoring the media pipeline  /home/me/projects/app  7132da86            65.8MB
- 2  antigravity  antigravity         2026-09-28 15:43:17  yes  pb            Fixed the printer default      /home/me/projects/app  6f36e30a            155.8KB
- 3  antigravity  antigravity         2026-09-20 11:04:52  no   db            Legacy conversation            /home/me/projects/app  c2d4ded1            581.5KB
- 4  antigravity  antigravity-ide     2026-09-21 12:48:32  yes  pb            IDE build conversation         /home/me/projects/app  5f124878            780.1KB
- 5  antigravity  antigravity-backup  2026-08-30 02:11:07  ?    pb            Snapshot of an older profile   /home/me/projects/app  9b3f21aa            1.2MB
- 6  vscode                            2026-09-28 16:49:46  ?    -     orphan  (unindexed chat)               /home/me/projects/app  bdc5fad2  no-log      1.9KB
+ #  host         instance            updated              idx  store  head  index   title                          project                session   log       size
+--  -----------  ------------------  -------------------  ---  -----  ----  ------  -----------------------------  ---------------------  --------  --------  ------
+ 1  vscode                            2026-10-01 09:12:41  ?    -      -             Refactoring the media pipeline  /home/me/projects/app  7132da86            65.8MB
+ 2  antigravity  antigravity         2026-09-28 15:43:17  yes  pb     full          Fixed the printer default      /home/me/projects/app  6f36e30a            155.8KB
+ 3  antigravity  antigravity         2026-09-20 11:04:52  no   db     -             Legacy conversation            /home/me/projects/app  c2d4ded1            581.5KB
+ 4  antigravity  antigravity-ide     2026-09-21 12:48:32  yes  pb     full          IDE build conversation         /home/me/projects/app  5f124878            780.1KB
+ 5  antigravity  antigravity-backup  2026-08-30 02:11:07  ?    pb     skel          Snapshot of an older profile   /home/me/projects/app  9b3f21aa            1.2MB
+ 6  vscode                            2026-09-28 16:49:46  ?    -      -     orphan  (unindexed chat)               /home/me/projects/app  bdc5fad2  no-log      1.9KB
 ```
 
 `idx` is whether the app's own index lists the conversation. Row 3 is on disk,
 readable, and **not** in the sidebar — exactly the state that makes a conversation
-look lost. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
+look lost. `head` is how complete the *content* log is: `skel` means the start of
+the conversation survives only as a cleared skeleton (row 5), `lost` means it is
+missing from every log. See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
+
+> **A transcript is not necessarily the whole conversation.** On a real 9,308-step
+> Antigravity session, `transcript_full.jsonl` started at step 7,231 — 78% of the
+> conversation was missing from the file that looked authoritative. Antigravity
+> spreads one conversation over several logs, so `agchat` merges them by
+> `step_index` and reports exactly how much is readable:
+>
+> ```
+> logs merged      transcript-full, chunk-full, transcript, chunk, overview
+> steps (merged)   4,750 · step 0…9,307
+> steps with text  1,342 (from step 6,380)
+>   ⚠ steps 0…6,379 are skeleton only (the app cleared their text; the
+>     full copy is in the encrypted <id>.pb store).
+> ```
+>
+> The remaining text is in `conversations/<id>.pb`, which is **encrypted** (entropy
+> 8.000 bits/byte) and not readable offline. Treat any total from a `skel`/`lost`
+> conversation as a lower bound.
 
 ---
 
@@ -120,7 +140,7 @@ node bin/agchat.js stats --latest  # analyse the most recent one
 | host | where the conversations live |
 | --- | --- |
 | `vscode` | `<User>/workspaceStorage/<hash>/` — `chatSessions/*.jsonl`, `GitHub.copilot-chat/transcripts/*.jsonl`, `state.vscdb` index |
-| `antigravity` | `~/.gemini/<instance>/brain/<id>/.system_generated/logs/transcript*.jsonl` + `conversation_summaries.db` |
+| `antigravity` | `~/.gemini/<instance>/brain/<id>/.system_generated/logs/` — `transcript*.jsonl`, `overview.txt`, `chunks/**` + `conversation_summaries.db` |
 
 An **instance** is one install or snapshot of a host. Antigravity keeps several:
 `antigravity` (the app), `antigravity-ide` (the IDE build), `antigravity-backup`

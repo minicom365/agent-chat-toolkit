@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 
-import { parseTranscript } from './parse.js';
+import { parseTranscript, parseTranscriptSet } from './parse.js';
 import { antigravity } from './hosts/index.js';
 
 export const LEVEL_NAMES = {
@@ -193,10 +193,18 @@ export async function searchSessions(sessions, opts = {}) {
 
     let entries = [];
     let parseError = null;
+    let coverage = null;
     if (transcriptWorthParsing) {
       try {
-        const parsed = await parseTranscript(s.transcriptPath);
+        // A conversation can be split over several logs (Antigravity keeps a
+        // content-elided overview plus a possibly head-truncated transcript), so
+        // merge them before projecting - otherwise the head is invisible to search.
+        const sources = Array.isArray(s.logSources) && s.logSources.length ? s.logSources : null;
+        const parsed = sources
+          ? await parseTranscriptSet(sources)
+          : await parseTranscript(s.transcriptPath);
         entries = projectLevel(parsed.events, level, maxChars);
+        if (parsed.coverage) coverage = parsed.coverage;
       } catch (err) {
         parseError = err?.message ?? String(err);
       }
@@ -224,6 +232,8 @@ export async function searchSessions(sessions, opts = {}) {
       truncated: pattern ? shown.length < entries.length : false,
       totalEntries: entries.length,
       parseError,
+      /** how much of the conversation the merged logs actually hold */
+      coverage,
     });
 
     if (results.length >= maxResults) break;

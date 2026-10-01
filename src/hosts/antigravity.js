@@ -36,6 +36,22 @@ export const TRANSCRIPT_FORMAT = 'antigravity-transcript';
 
 const NAME_HINT = 'antigravity';
 
+/**
+ * The step logs the app keeps per conversation. `priority` decides which copy of
+ * a duplicated step wins when the sources are merged: a real transcript beats the
+ * content-elided overview.
+ */
+const LOG_FILES = {
+  'transcript_full.jsonl': { kind: 'transcript-full', variant: 'full', priority: 4 },
+  'transcript.jsonl': { kind: 'transcript', variant: 'short', priority: 3 },
+  'overview.txt': { kind: 'overview', variant: 'overview', priority: 2 },
+};
+
+const CHUNK_DIRS = {
+  transcript_full: { kind: 'chunk-full', variant: 'full', priority: 3 },
+  transcript: { kind: 'chunk', variant: 'short', priority: 2 },
+};
+
 export function geminiDir() {
   return process.env.GEMINI_DIR || path.join(os.homedir(), '.gemini');
 }
@@ -129,13 +145,136 @@ export function transcriptPathFor(brainDir, id) {
 
 /** Prefer the untruncated log when both exist. */
 export async function pickTranscript(brainDir, id) {
-  if (!brainDir) return null;
-  const { full, short } = transcriptPathFor(brainDir, id);
-  const fullStat = await statOrNull(full);
-  if (fullStat) return { path: full, stat: fullStat, variant: 'full' };
-  const shortStat = await statOrNull(short);
-  if (shortStat) return { path: short, stat: shortStat, variant: 'short' };
+  const sources = await logSourcesFor(brainDir, id);
+  if (!sources.length) return null;
+  const primary = sources[0];
+  return { path: primary.path, stat: { size: primary.bytes, mtimeMs: primary.mtimeMs }, variant: primary.variant };
+}
+
+/**
+ * Every log the app keeps for one conversation, richest first.
+ *
+ * Antigravity spreads a single conversation over several files that overlap and
+ * complement each other:
+ *
+ *   transcript_full.jsonl  the untruncated tail (can lose the head of a long session)
+ *   transcript.jsonl       the capped twin of the above
+ *   chunks/…/NNNNNNNN.jsonl the newest slice, appended between flushes
+ *   overview.txt           the full step skeleton; its `content` is elided for all but
+ *                          the newest steps (`status: "CLEARED"` means the text was dropped)
+ *
+ * Merging them recovers the step timeline of the whole conversation even when
+ * `transcript_full.jsonl` lost its head, which is the only source that still holds
+ * the early tool calls.
+ */
+export async function logSourcesFor(brainDir, id) {
+  if (!brainDir) return [];
+  const logs = path.join(brainDir, id, '.system_generated', 'logs');
+  const out = [];
+  for (const [name, meta] of Object.entries(LOG_FILES)) {
+    const file = path.join(logs, name);
+    const stat = await statOrNull(file);
+    if (stat) {
+      out.push({ path: file, kind: meta.kind, variant: meta.variant, priority: meta.priority, bytes: stat.size, mtimeMs: stat.mtimeMs });
+    }
+  }
+  for (const [dir, meta] of Object.entries(CHUNK_DIRS)) {
+    const base = path.join(logs, 'chunks', dir);
+    let entries = [];
+    try {
+      entries = await fsp.readdir(base, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith('.jsonl')) continue;
+      const file = path.join(base, e.name);
+      const stat = await statOrNull(file);
+      if (!stat) continue;
+      out.push({ path: file, kind: meta.kind, variant: meta.variant, priority: meta.priority, bytes: stat.size, mtimeMs: stat.mtimeMs });
+    }
+  }
+  return out.sort((a, b) => b.priority - a.priority || a.path.localeCompare(b.path));
+}
+
+/**
+ * Read just enough of a step log to learn which step it starts and ends at.
+ * Both files are written in ascending step order, so the first and last lines
+ * bound the range.
+ */
+export async function stepRangeOf(file) {
+  let fh;
+  try {
+    fh = await fsp.open(file, 'r');
+    const { size } = await fh.stat();
+    const headLen = Math.min(size, 4096);
+    const head = Buffer.alloc(headLen);
+    await fh.read(head, 0, headLen, 0);
+    const first = parseStepIndex(head.toString('utf8'));
+    if (first === null) return null;
+    const tailLen = Math.min(size, 8192);
+    const tail = Buffer.alloc(tailLen);
+    await fh.read(tail, 0, tailLen, size - tailLen);
+    const tailText = tail.toString('utf8');
+    const lines = tailText.split('\n').filter((l) => l.trim());
+    let last = null;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      last = parseStepIndex(lines[i]);
+      if (last !== null) break;
+    }
+    return { first, last: last ?? first };
+  } catch {
+    return null;
+  } finally {
+    if (fh) await fh.close();
+  }
+}
+
+function parseStepIndex(text) {
+  for (const line of String(text).split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const o = JSON.parse(trimmed);
+      if (o && Number.isFinite(Number(o.step_index))) return Number(o.step_index);
+    } catch {
+      /* not a step line */
+    }
+  }
   return null;
+}
+
+/**
+ * Cheap head-loss check for the session list: read the first/last step of the
+ * content transcript and of the overview skeleton only (chunks are always a
+ * subset of the tail, so they never change the answer).
+ *
+ * Two different things can be missing, and conflating them hides real data loss:
+ *
+ *   headLostSteps          steps missing from the *content* transcript — the text
+ *                          may still be described by `overview.txt`
+ *   unrecoverableHeadSteps steps missing from *every* log — genuinely gone
+ */
+async function coverageFor(sources) {
+  const full = sources.find((s) => s.kind === 'transcript-full') ?? sources.find((s) => s.kind === 'transcript');
+  const overview = sources.find((s) => s.kind === 'overview');
+  const noData = { headLostSteps: 0, unrecoverableHeadSteps: 0, stepSpan: null, hasOverview: false };
+  if (!full && !overview) return noData;
+
+  const [fullRange, overviewRange] = await Promise.all([
+    full ? stepRangeOf(full.path) : null,
+    overview ? stepRangeOf(overview.path) : null,
+  ]);
+
+  const firsts = [fullRange?.first, overviewRange?.first].filter((v) => v != null);
+  const lasts = [fullRange?.last, overviewRange?.last].filter((v) => v != null);
+  const first = firsts.length ? Math.min(...firsts) : null;
+  return {
+    headLostSteps: fullRange && fullRange.first > 0 ? fullRange.first : 0,
+    unrecoverableHeadSteps: first != null && first > 0 ? first : 0,
+    stepSpan: first != null ? { first, last: Math.max(...lasts) } : null,
+    hasOverview: Boolean(overviewRange),
+  };
 }
 
 export async function artifactsFor(sessionDir) {
@@ -325,10 +464,14 @@ export async function listSessions({ roots = null, limit = 0, profileRoots = nul
       const row = rows.get(id);
       const cached = historyCache.get(id) ?? null;
       const entry = sidebar?.entries?.get(id) ?? null;
-      const transcript = await pickTranscript(inst.brainDir, id);
+      const logSources = await logSourcesFor(inst.brainDir, id);
+      const transcript = logSources.length
+        ? { path: logSources[0].path, stat: { size: logSources[0].bytes, mtimeMs: logSources[0].mtimeMs }, variant: logSources[0].variant }
+        : null;
       const sessionDir = inst.brainDir ? path.join(inst.brainDir, id) : null;
       const dirStat = sessionDir ? await statOrNull(sessionDir) : null;
       const storeKind = await detectStoreKind(path.join(inst.dir, 'conversations'), id);
+      const { headLostSteps, unrecoverableHeadSteps, stepSpan, hasOverview } = await coverageFor(logSources);
 
       const uris = entry?.workspaceUris?.length
         ? entry.workspaceUris
@@ -377,6 +520,16 @@ export async function listSessions({ roots = null, limit = 0, profileRoots = nul
         statePath: null,
         transcriptPath: transcript?.path ?? null,
         transcriptVariant: transcript?.variant ?? null,
+        /** every step log for this conversation, richest first (overview.txt included) */
+        logSources,
+        logSourceKinds: logSources.map((s) => s.kind),
+        /** steps dropped from the head of the content transcript (0 = complete) */
+        headLostSteps,
+        /** steps missing from every log, i.e. gone for good */
+        unrecoverableHeadSteps,
+        /** [first, last] step index across all logs */
+        stepSpan,
+        hasOverview,
         updatedMs,
         createdMs: entry?.createdMs ?? normaliseTime(cached?.createdTime) ?? null,
         lastUserInputMs: parsePbTime(row?.last_user_input_time) ?? normaliseTime(cached?.lastUserInputTime),

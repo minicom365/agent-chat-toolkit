@@ -4,6 +4,59 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-02
+
+Everything in this release comes from one correction: **`transcript_full.jsonl` is
+not a complete record, and `conversations/<id>.pb` is genuinely encrypted.** The
+previous version asserted the opposite for both. Both claims were re-measured on a
+real install, and the tool now recovers what actually survives.
+
+### Fixed
+
+- **`transcript_full.jsonl` can lose the head of a long conversation.** On a real
+  9,308-step session the log started at step **7,231** — 78% of the conversation
+  was absent from the only file that looked authoritative. `agchat` previously
+  reported totals for that fragment as if they were the whole session.
+- **`overview.txt` is now a source.** It sits in the same `logs/` folder, uses the
+  same JSONL schema, and holds the full step skeleton for the steps the transcript
+  dropped (`"status": "CLEARED"` marks a step whose text the app cleared). Every log
+  in the folder is now merged by `step_index`, keeping the richest copy of each
+  step: for the session above that is 2,077 → 4,750 events, with the early timeline
+  and 248 early tool calls recovered.
+- **`docs/ANTIGRAVITY.md` no longer claims "nothing relevant is encrypted."** It now
+  records the measurements: `.pb` entropy 8.000 bits/byte, no container or
+  compression magic, no protobuf structure at the top level.
+
+### Added
+
+- **`parseTranscriptSet()`** — merges several logs that describe the same
+  conversation. Formats exposing an `ORDER_KEY` are merged by that key (richest copy
+  wins, then source priority); anything else is concatenated in order.
+- **`coverageOf()` / a coverage block in `stats`** — separates "steps present" from
+  "steps that still carry text", and reports `firstTextStep` so a partial
+  conversation is never presented as a complete one.
+- **`head` column in `sessions`**: `full` (content complete), `skel` (head survives
+  only as a cleared skeleton), `lost` (head missing from every log), `-` (no log).
+  `unrecoverableHeadSteps` distinguishes "gone" from "recoverable via overview".
+- **Warnings** in `stats` naming the encrypted store when a conversation's text is
+  partial, plus a coverage table in the report header.
+- `logSourcesFor()` and `stepRangeOf()` in the Antigravity host, and a
+  `test/coverage.test.js` suite (11 specs) with a sandbox fixture for a truncated
+  conversation.
+
+### Documented, not fixed
+
+- **Offline decryption of `.pb` is not possible.** On Windows the Electron/Chromium
+  master key (`os_crypt.encrypted_key`, unprotected with DPAPI) is *correct* — it
+  authenticates the `v10` secrets in `state.vscdb` — but it does not decrypt any
+  `.pb`; AES-128/192/256 in CTR and CBC, and GCM with the tag at either end, over
+  nonce lengths 12/16 and header skips 0/1/2/4/8, all failed. No DPAPI-wrapped blob
+  exists anywhere in the profile (28,168 files scanned), so the key is not stored
+  via Electron `safeStorage` either. The upstream tool's own README takes the key
+  from the macOS Keychain and asks Windows users to supply it manually — the key is
+  not derivable from the filesystem. The remaining routes are the app's own reader
+  (the bundled language server) and the `overview.txt` skeleton.
+
 ## [0.3.0] - 2026-10-01
 
 **Renamed** `copilot-transcript-stats` → **`agent-chat-toolkit`**, CLI

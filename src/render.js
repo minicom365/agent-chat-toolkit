@@ -44,6 +44,42 @@ function producerLine(meta) {
   return parts.length ? parts.join(' · ') : '-';
 }
 
+/**
+ * Report how complete the merged logs are. Antigravity keeps a conversation in
+ * several places and none of them is guaranteed complete, so a bare total is
+ * misleading: "1,234 steps" says nothing about how many still have their text.
+ */
+export function coverageLines(coverage, st) {
+  const { stepSpan, steps, textSteps, firstTextStep, headLostSteps, sources = [] } = coverage;
+  const out = [];
+  const kinds = sources.length
+    ? sources.map((s) => s.kind).join(', ')
+    : 'single file';
+  out.push(
+    kv(st, [
+      ['logs merged', kinds],
+      ['steps (merged)', stepSpan ? `${fmtInt(steps)} · step ${fmtInt(stepSpan.first)}…${fmtInt(stepSpan.last)}` : fmtInt(steps)],
+      ['steps with text', `${fmtInt(textSteps)}${firstTextStep != null ? ` (from step ${fmtInt(firstTextStep)})` : ''}`],
+    ])
+  );
+  if (headLostSteps > 0) {
+    out.push(
+      st.red(
+        `  ⚠ the first ${fmtInt(headLostSteps)} step(s) are not in any readable log - ` +
+          'they exist only in the encrypted <id>.pb store.'
+      )
+    );
+  } else if (firstTextStep != null && stepSpan && firstTextStep > stepSpan.first) {
+    out.push(
+      st.yellow(
+        `  ⚠ steps ${fmtInt(stepSpan.first)}…${fmtInt(firstTextStep - 1)} are skeleton only ` +
+          '(the app cleared their text; the full copy is in the encrypted <id>.pb store).'
+      )
+    );
+  }
+  return out;
+}
+
 export function renderStats(stats, { styler: st, warnings = [] }) {
   const c = stats.counts;
   const t = stats.timing;
@@ -61,6 +97,7 @@ export function renderStats(stats, { styler: st, warnings = [] }) {
       ['wall-clock span', fmtDuration(t.span.ms)],
     ])
   );
+  if (stats.coverage) out.push(...coverageLines(stats.coverage, st));
   if (stats.parseErrors) {
     out.push(st.yellow(`  ${stats.parseErrors} unparsable line(s) skipped`));
   }
@@ -417,6 +454,14 @@ export function renderSessions(sessions, { styler: st, limit = 60, total = null 
   if (!sessions.length) return 'No conversations found.';
   const shown = sessions.slice(0, limit);
   const idxMark = (s) => (s.inIndex === true ? st.green('yes') : s.inIndex === false ? st.red('no') : st.gray('?'));
+  // `head` flags a conversation whose content transcript lost its head: the early
+  // steps survive only as an overview skeleton, so text totals are partial.
+  const headMark = (s) => {
+    if (!s.transcriptPath) return st.gray('-');
+    if (s.unrecoverableHeadSteps > 0) return st.red('lost');
+    if (s.headLostSteps > 0) return st.yellow('skel');
+    return s.hasOverview ? st.green('full') : st.gray('-');
+  };
   const rows = shown.map((s, n) => [
     String(n + 1),
     s.host,
@@ -424,6 +469,7 @@ export function renderSessions(sessions, { styler: st, limit = 60, total = null 
     s.updatedMs ? localStamp(s.updatedMs) : '-',
     idxMark(s),
     s.storeKind ?? st.gray('-'),
+    headMark(s),
     s.indexed === false ? st.yellow('orphan') : '',
     truncate(s.title ?? '', 40),
     truncate(s.project ?? '', 34),
@@ -438,13 +484,15 @@ export function renderSessions(sessions, { styler: st, limit = 60, total = null 
     ),
     '',
     table(
-      ['#', 'host', 'instance', 'updated', 'idx', 'store', 'index', 'title', 'project', 'session', 'log', 'size'],
+      ['#', 'host', 'instance', 'updated', 'idx', 'store', 'head', 'index', 'title', 'project', 'session', 'log', 'size'],
       rows,
-      ['right', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'right']
+      ['right', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'right']
     ),
     '',
     st.gray('  idx   = listed in the app own conversation index (yes/no/? = unknown)'),
     st.gray('  store = per-conversation store: pb (current) | db (legacy) | - (absent)'),
+    st.gray('  head  = content log completeness: full | skel (head is skeleton only) |'),
+    st.gray('          lost (head is missing from every log) | -'),
     st.gray('  log   = this tool found a readable transcript for it'),
     st.gray('  session id prefix works with `show`, `stats --session`, `move`.'),
   ];

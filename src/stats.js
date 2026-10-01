@@ -170,6 +170,8 @@ export function computeStats(parsed, opts = {}) {
     parseErrors: parsed.parseErrors,
     format: parsed.format ?? null,
     meta: adapter ? adapter.extractMeta(events) : {},
+    /** how much of the conversation the log actually holds (null for single-file parses) */
+    coverage: parsed.coverage ?? null,
     counts: {
       events: events.length,
       undatedEvents: untimedEvents,
@@ -241,6 +243,20 @@ export function sanityWarnings(stats) {
   if (stats.counts.undatedEvents > 0) {
     w.push(
       `${stats.counts.undatedEvents} event(s) have no parsable timestamp and were excluded from timing.`
+    );
+  }
+  const cov = stats.coverage;
+  if (cov && cov.headLostSteps > 0) {
+    w.push(
+      `The log starts at step ${cov.stepSpan.first}: the first ${cov.headLostSteps} step(s) of this ` +
+        'conversation are not in any readable log. Totals below cover only what survived.'
+    );
+  }
+  if (cov && cov.firstTextStep != null && cov.stepSpan && cov.firstTextStep > cov.stepSpan.first) {
+    w.push(
+      `Text survives only from step ${cov.firstTextStep} onward (${cov.textSteps} steps carry content). ` +
+        'Earlier steps are a skeleton: the app cleared their text and the full copy lives in the ' +
+        'encrypted <id>.pb store, which is not readable offline.'
     );
   }
   return w;

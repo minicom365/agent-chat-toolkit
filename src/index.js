@@ -17,7 +17,7 @@ export {
   resolveSingle,
   TRANSCRIPT_GLOBS,
 } from './discover.js';
-export { parseTranscript, parseLines, peekTranscript, foldTranscripts, detectFormat, readHead } from './parse.js';
+export { parseTranscript, parseTranscriptSet, parseLines, peekTranscript, foldTranscripts, detectFormat, readHead, coverageOf, eventWeight } from './parse.js';
 export { computeStats, sanityWarnings, countWords } from './stats.js';
 export {
   analyzeTiming,
@@ -39,6 +39,7 @@ export {
   renderSearchResults,
   renderMovePlan,
   renderStats,
+  coverageLines,
   renderTime,
   renderTools,
   renderTimeline,
@@ -47,6 +48,7 @@ export {
 } from './render.js';
 export { HOSTS, allSessions, findSession, inventory, hostIds } from './hosts/index.js';
 export { vscode as vscodeHost, antigravity as antigravityHost } from './hosts/index.js';
+export { logSourcesFor, stepRangeOf } from './hosts/antigravity.js';
 export { moveSession } from './hosts/vscode.js';
 export {
   searchSessions,
