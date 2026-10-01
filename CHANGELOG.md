@@ -4,6 +4,46 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-10-01
+
+A second, adversarial pass over every store on the profile found a ceiling that
+v0.3.3 had described as corruption. Nothing was damaged.
+
+### Fixed
+
+- **`recover` now pages `GetCascadeTrajectorySteps` instead of calling
+  `GetCascadeTrajectory` once.** The whole-trajectory endpoint stops early on
+  encrypted stores of 64 MiB or more, returning a **head prefix** while still
+  reporting the true `numTotalSteps` in a well-formed response. The steps
+  endpoint has no such ceiling and takes a `stepOffset`. Measured effect:
+  `cfad63bc` went from 12,864 to **27,561** steps; `9d94a789` from 4,744 to
+  **5,043**.
+- `recover --instance` now matches the instance name **exactly**. A substring
+  match made `--instance antigravity` also select `antigravity-ide` and
+  `antigravity-backup`, and since the same conversation id commonly exists in all
+  three, every recovery of a duplicated conversation failed as ambiguous.
+
+### Added
+
+- `LS_STEPS_ENDPOINT` and `extractStepsArray()` in
+  `src/hosts/antigravity-recover.js`. Pages are merged as **text**, not as parsed
+  objects, so a 50 MB page never gets materialised twice.
+
+### Measured (documented in `docs/ANTIGRAVITY.md`)
+
+- Across 288 readable stores, the split is exact: **282 stores under 64 MiB
+  return every step; 6 stores of 69.4–79.3 MB stop early, always as a prefix.**
+  The cutoff brackets 64 MiB (67,108,864 B) between 63.7 MB and 69.4 MB.
+- It is the reader, not the response: the body is complete parseable JSON,
+  byte-identical when repeated, faster when warm (8,915 ms → 3,515 ms), and a
+  113 MB response came back whole, so the threshold tracks the **store size**.
+- It affects the **encrypted `.pb` generation only** — plaintext `.db` stores
+  return everything at any size (90.9 MB → 17,738 of 17,738 steps).
+- **The three zero-filled `.pb` files are the only genuinely unusable stores**
+  (`613a30da` 27.6 MB, `6d930628` 33.7 MB, `f3899755` 48.1 MB). Every other
+  store reads back completely.
+- Every SQLite store on the profile passes `PRAGMA integrity_check`: 321 of 321.
+
 ## [0.3.3] - 2026-10-01
 
 ### Added
@@ -29,7 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documented limitations (observed, not specific to this tool)
 
-- A few very large stores are corrupt: HTTP 500, non-deterministic reproduction.
+- ~~A few very large stores are corrupt: HTTP 500, non-deterministic
+  reproduction.~~ **Corrected in 0.3.4.** The HTTP 500 was caused by pointing the
+  server at the wrong instance (`--app_data_dir` defaults to `antigravity-ide`),
+  and the large-store truncation is a 64 MiB reader ceiling, not damage.
 - `GetAllCascadeTrajectories` is capped at ~100 summaries, so listing goes stale;
   `recover` fetches per id instead.
 

@@ -23,6 +23,7 @@ import path from 'node:path';
  */
 
 export const LS_ENDPOINT = '/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory';
+export const LS_STEPS_ENDPOINT = '/exa.language_server_pb.LanguageServerService/GetCascadeTrajectorySteps';
 export const LS_LIST_ENDPOINT = '/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories';
 
 // The server prints two lines in order: "... at N for HTTPS (gRPC)" then
@@ -132,8 +133,48 @@ export function postJson(port, endpoint, body, { timeoutMs = 300000 } = {}) {
   });
 }
 
-/** Fetch one conversation as a full trajectory JSON string. */
-export async function recoverTrajectory({ id, binary, appDataName }) {
+/**
+ * Extract the raw text of the `steps` array from a response body.
+ *
+ * Merging pages as text rather than as objects keeps a multi-hundred-megabyte
+ * trajectory from being materialised twice; the only parsing is bracket
+ * counting that respects string escapes.
+ */
+export function extractStepsArray(text) {
+  const key = '"steps":[';
+  const start = text.indexOf(key);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const from = start + key.length - 1; // at the '['
+  for (let i = from; i < text.length; i += 1) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === '[' || c === '{') depth += 1;
+    else if (c === ']' || c === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(from + 1, i);
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch one conversation as a complete trajectory JSON string.
+ *
+ * Uses `GetCascadeTrajectorySteps`, not `GetCascadeTrajectory`: the latter
+ * silently stops early on large stores — measured on real files, a 79 MB store
+ * came back as 12,864 of its 27,561 steps. The steps RPC instead exposes a
+ * `stepOffset`, so pagination retrieves everything.
+ */
+export async function recoverTrajectory({ id, binary, appDataName, maxPages = 500 }) {
   if (!id) throw new Error('recoverTrajectory: a conversation id is required');
   if (!binary) {
     const err = new Error(
@@ -144,7 +185,30 @@ export async function recoverTrajectory({ id, binary, appDataName }) {
   }
   const { port, proc } = await launchLanguageServer({ binary, appDataName });
   try {
-    return await postJson(port, LS_ENDPOINT, { cascadeId: id });
+    const pages = [];
+    let offset = 0;
+    let total = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const text = await postJson(port, LS_STEPS_ENDPOINT, { cascadeId: id, stepOffset: offset });
+      const n = countSteps(text);
+      if (n === 0) break;
+      const inner = extractStepsArray(text);
+      if (inner === null) {
+        // Unknown shape: fall back to returning the single page as-is.
+        if (!pages.length) return text;
+        break;
+      }
+      pages.push(inner);
+      total += n;
+      offset += n;
+    }
+    if (!pages.length) {
+      const err = new Error(`language server returned no steps for ${id}`);
+      err.code = 'ENOTFOUND';
+      throw err;
+    }
+    return `{"cascadeId":${JSON.stringify(id)},"stepCount":${total},"pages":${pages.length},"steps":[${pages.join(',')}]}`;
   } finally {
     proc.kill();
   }

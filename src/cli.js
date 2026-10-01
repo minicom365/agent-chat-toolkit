@@ -30,7 +30,7 @@ import { SafetyError, formatSafetyError } from './safety.js';
 import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.3.3';
+export const VERSION = '0.3.4';
 
 const HELP = `agent-chat-toolkit ${VERSION}
 Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
@@ -393,7 +393,11 @@ async function cmdRecover(opts, st) {
   if (!opts.session) throw new SafetyError('recover needs --session <id>.', 'NO_SESSION');
 
   const sessions = await allSessions({ hosts: ['antigravity'], roots: opts.root });
-  const one = findSession(sessions, opts.session);
+  // Exact instance match: a substring would make `--instance antigravity` also
+  // select `antigravity-ide` and `antigravity-backup`, and the same conversation
+  // id commonly exists in several instances.
+  const pool = opts.instance ? sessions.filter((s) => s.instance === opts.instance) : sessions;
+  const one = findSession(pool, opts.session);
   if (!one) throw new Error(`No conversation matched --session ${opts.session}`);
   if (one.host !== 'antigravity') {
     throw new Error(`recover only supports the antigravity host (got ${one.host}).`);

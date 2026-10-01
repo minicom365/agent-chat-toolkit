@@ -196,23 +196,66 @@ What this does, in order:
 2. Waits for the `listening on random port at N for HTTP` line. **That line is
    the plain-HTTP port; the line that precedes it is the `HTTPS (gRPC)` port and
    must not be picked.**
-3. POSTs `{"cascadeId":"<id>"}` to
-   `/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory` and
-   writes the raw JSON trajectory.
+3. Pages `GetCascadeTrajectorySteps` from `stepOffset: 0` until a page returns no
+   steps, then writes the merged JSON trajectory.
 
 Verified on a real 9,308-step conversation whose `transcript_full.jsonl` had
 lost 78% of its head: the endpoint returned **all 9,308 steps** (56.9 MB) in
 2.5 s, matching the catalog's `step_count` exactly.
 
-Two limitations observed in practice, and not specific to `agchat`:
+### The 64 MiB ceiling, and why the steps endpoint is the one to call
 
-1. **A few very large stores are corrupt.** The server answers HTTP 500
-   (`trajectory … not found in any store`) and the reproduction is not
-   deterministic — the same conversation can work on one run and fail on the
-   next. Those stores are damaged on disk, not merely unreadable.
-2. **`GetAllCascadeTrajectories` is capped at about 100 summaries.** Beyond that
-   the list goes stale, which is why `recover` fetches per id rather than via the
-   list endpoint, and why `agchat sessions` still enumerates the filesystem.
+`GetCascadeTrajectory` and `GetCascadeTrajectorySteps` do **not** have the same
+reach. Measured across every store on a real profile (288 readable stores):
+
+| store size | stores | `GetCascadeTrajectory` |
+| --- | --- | --- |
+| under 64 MiB (max seen 63.7 MB) | 282 | returns every step |
+| 64 MiB and over (69.4 – 79.3 MB) | 6 | stops early, always a **head prefix** |
+
+The split is exact — no store was misclassified — and the cutoff sits between
+63.7 MB and 69.4 MB, bracketing the ubiquitous 64 MiB (67,108,864 B) default.
+Two of those conversations came back as 4,744 of 5,043 steps and 12,864 of
+27,561 steps.
+
+It is a limit in the reader, not a cap on the response:
+
+- The response is **complete, parseable JSON** that ends with
+  `"status":"CASCADE_RUN_STATUS_IDLE","numTotalSteps":27561` — the server
+  discloses the true total while returning only part of it, so nothing about
+  the reply looks wrong.
+- Repeating the call returns a **byte-identical** body (129,800,304 B), and
+  warming the process only makes it faster (8,915 ms → 3,515 ms), so it is not
+  a deadline and not a race.
+- A 113 MB response came back **complete** for a store under the threshold, so
+  it is not a response-size limit either. The threshold follows the **store
+  file size**.
+- The cut does not land on a chunk boundary — the `brain/…/logs/chunks/`
+  directories are empty for those conversations.
+
+It applies to the **encrypted `.pb` generation only**. The same measurement on
+newer plaintext `.db` stores returns everything at any size (90.9 MB → 17,738 of
+17,738 steps; 79.0 MB → 14,075 of 14,075).
+
+`GetCascadeTrajectorySteps` has no such ceiling: it returned all 27,561 steps
+(48.6 MB) for the store that the other endpoint cut at 12,864. That is why
+`recover` calls it, and why a `lock`ed conversation exports in full even though
+the app that wrote it cannot display it.
+
+### Genuinely damaged stores
+
+Three `.pb` files are **entirely zero bytes inside** — `613a30da` (27.6 MB),
+`6d930628` (33.7 MB) and `f3899755` (48.1 MB) — and each exists in two instances.
+Nothing was ever written to them, so no reader, key or protocol will recover a
+step from them. Every other store on the profile reads back completely.
+
+`GetAllCascadeTrajectories` is separately capped at about 100 summaries. Beyond
+that the list goes stale, which is why `recover` fetches per id rather than via
+the list endpoint, and why `agchat sessions` still enumerates the filesystem.
+
+One trap worth repeating: **pass the full conversation id.** A truncated id gets
+`trajectory not found (error ID: …)`, which looks exactly like the store being
+unreadable.
 
 `--app_data_dir` matters and is easy to get wrong: the server **defaults to
 `antigravity-ide`**, so a conversation in the `antigravity` instance is

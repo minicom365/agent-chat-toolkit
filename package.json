@@ -1,6 +1,6 @@
 {
   "name": "agent-chat-toolkit",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Zero-dependency CLI to analyse and navigate agent conversations kept on disk by VS Code Copilot Chat and Antigravity (app, IDE and backup instances): statistics, tool usage, effective development time, search and conversation migration.",
   "keywords": [
     "copilot",
