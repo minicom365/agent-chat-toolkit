@@ -11,7 +11,9 @@ test('counts separate human turns, agent output and tool round-trips', () => {
   const s = statsOf(syntheticStatsLines());
   assert.equal(s.counts.humanTurns, 2);
   assert.equal(s.counts.assistantMessages, 1);
-  assert.equal(s.counts.agentSegments, 0);
+  // no assistant.turn_start in this fixture, so agent segments fall back to the
+  // number of assistant messages (formats without an explicit turn marker)
+  assert.equal(s.counts.agentSegments, 1);
   assert.equal(s.counts.toolCalls, 2);
   assert.equal(s.counts.toolFailures, 1);
   assert.equal(s.counts.toolRequests, 2);
@@ -51,7 +53,7 @@ test('tool table is sorted by call count then measured runtime', () => {
 
 test('sanity warnings flag empty and untimed transcripts', () => {
   const empty = computeStats(parseLines([]));
-  assert.ok(sanityWarnings(empty).some((w) => w.includes('No user.message')));
+  assert.ok(sanityWarnings(empty).some((w) => w.includes('No human-authored events')));
   const broken = parseLines([...syntheticStatsLines(), '{oops']);
   const s = computeStats(broken);
   assert.ok(sanityWarnings(s).some((w) => w.includes('could not be parsed')));

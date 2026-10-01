@@ -1,57 +1,59 @@
 # copilot-transcript-stats
 
-**Zero-dependency CLI that turns VS Code Copilot Chat agent transcripts into conversation statistics, tool-usage breakdowns and a defensible estimate of effective development time.**
+**Zero-dependency CLI to analyse and navigate the agent conversations your editor keeps on disk — VS Code Copilot Chat and Antigravity.**
 
 **한국어 문서: [README.ko.md](README.ko.md)**
 
-VS Code writes an append-only JSONL event log for every agent chat session
-(`…/User/workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/<session>.jsonl`).
-Those files are goldmines — and completely unreadable. A single afternoon of agent
-work produces ~10 MB and ~10,000 events. `copilot-transcript-stats` reads them and
-answers the questions you actually have:
+Both hosts write an append-only JSONL log for every conversation and then hide it
+behind a UI that only shows the current workspace. A single afternoon of agent work
+produces ~10 MB and ~10,000 events. This tool reads those files and answers the
+questions that actually matter:
 
 - How many *real* asks did I make, versus how many machine events got logged?
-- Which tools ran, how often did they fail, and how long did they actually take?
+- Which tools ran, how often did they fail, and how long did they take?
 - How much wall-clock time was that, and how much of it was real work?
+- Where is that conversation from last month, and how do I get it back?
 
 ```
-$ transcript-stats stats --latest
+$ transcript-stats sessions --limit 6
 
-1. Conversation statistics
-────────────────────────────────────────────────────────────────────────
-human turns (user.message)       5
-assistant messages               412
-agent turn markers (turn_start)  418
-tool calls executed              419 (3 failed)
-tool calls requested by model    421
-total events (raw lines)         1,986
-
-  Derived ratios (this is where tool traffic contaminates naive counts):
-agent markers per human turn   83.60
-tool calls per human turn      83.80
-machine-only line share        83.5%
+ #  host         updated              index   title                          project                session   log       size
+--  -----------  -------------------  ------  -----------------------------  ---------------------  --------  --------  ------
+ 1  vscode       2026-10-01 09:12:41          Refactoring the media pipeline  /home/me/projects/app  7132da86            65.8MB
+ 2  antigravity  2026-09-28 15:43:17          Sandbox antigravity session     /home/me/projects/app  6f36e30a            155.8KB
+ 3  vscode       2026-09-28 16:49:46  orphan  (unindexed chat)               /home/me/projects/app  bdc5fad2  no-log      1.9KB
 ```
 
 ---
 
-## Why this exists
+## What it does
 
-Three traps make naive transcript analysis wrong, and this tool is built
-specifically to avoid them.
+| command | purpose |
+| --- | --- |
+| **`sessions`** | one catalog across every host, workspace and profile — including conversations the editor has "forgotten" |
+| **`find`** | keyword search with four detail levels, so tool noise never buries the decision you are looking for |
+| **`show`** | replay one conversation at the level of detail you need |
+| **`move`** | migrate a VS Code conversation into another workspace's storage, with backups and a dry-run default |
+| **`stats` / `time` / `tools`** | conversation statistics, tool usage and a defensible estimate of effective development time |
+| **`query` / `timeline` / `export`** | raw event access as text, JSON, Markdown or CSV |
+
+## Why this exists
 
 ### 1. Tool traffic is mixed into the conversation
 
-A transcript interleaves three unrelated kinds of records:
+A transcript interleaves three unrelated kinds of record:
 
-| kind | event types | meaning |
-| --- | --- | --- |
-| conversation | `user.message`, `assistant.message` | a human asked, the model answered |
-| bookkeeping | `assistant.turn_start`, `assistant.turn_end` | the agent's own loop markers |
-| tool round-trips | `tool.execution_start`, `tool.execution_complete` | the agent used a tool |
+| kind | VS Code | Antigravity | meaning |
+| --- | --- | --- | --- |
+| conversation | `user.message`, `assistant.message` | `USER_INPUT`, `PLANNER_RESPONSE` | a human asked, the model answered |
+| bookkeeping | `assistant.turn_start/_end` | — | the agent's own loop |
+| tool round-trips | `tool.execution_start/_complete` | `GENERIC`, `RUN_COMMAND`, `VIEW_FILE`, … | the agent used a tool |
 
-Counting raw lines gives a number dominated by machine bookkeeping — in the example
-above, **83.5% of the log is neither a human nor a model message**. The tool reports
-them separately and shows the ratios explicitly so you can see the contamination.
+Counting raw lines gives a number dominated by machine bookkeeping. In one real
+session, **79% of the log was neither a human nor a model message**. The tool reports
+each kind separately and prints the ratios, so the contamination is visible instead of
+implied.
+
 ### 2. Wall-clock span is not working time
 
 A transcript records *when an event was written*, nothing else. The span between the
@@ -60,11 +62,11 @@ A four-day session is not four days of work.
 
 ### 3. Every "time spent" number is a model, so the model is shown
 
-The tool sums the silences between consecutive events, but caps each silence at a
-threshold (default 5 minutes). Anything below the cap is assumed to be "still
-working"; anything above it is assumed to contain a break. The threshold is a
-**judgement, not a measurement**, so the tool prints the whole sensitivity curve
-rather than a single number pretending to be the truth:
+The tool sums the silences between consecutive events, capping each silence at a
+threshold (default 5 minutes). Below the cap is assumed to be "still working"; above it
+is assumed to contain a break. The threshold is a **judgement, not a measurement**, so
+the whole sensitivity curve is printed instead of a single number pretending to be the
+truth:
 
 ```
   Sensitivity of the cap (the cap is a modelling choice, not a measurement):
@@ -79,8 +81,14 @@ cap / gap  effective time        idle  active ratio
   * = cap used for the headline number
 ```
 
-Read it as a range. If the answer you need changes between the 2m and the 15m row,
-the data does not support a precise claim.
+Read it as a range. If the answer you need changes between the 2m and the 15m row, the
+data does not support a precise claim.
+
+### 4. Conversations get orphaned, and the editor will not tell you
+
+A session can exist on disk with no entry in the history panel, because the index lost
+it or because its files landed in a *different* `workspaceStorage` folder for the same
+workspace. `sessions` marks those as `orphan`, and `move` is the repair.
 
 ---
 
@@ -94,100 +102,152 @@ cd copilot-transcript-stats
 npm link          # optional: makes `transcript-stats` available on PATH
 ```
 
-Or run it directly without installing:
-
 ```bash
-node bin/transcript-stats.js stats --latest
+node bin/transcript-stats.js hosts           # what did it find on this machine?
+node bin/transcript-stats.js sessions        # list every conversation, newest first
+node bin/transcript-stats.js stats --latest  # analyse the most recent one
 ```
 
-## Quick start
+## Hosts
 
-```bash
-transcript-stats list                      # what transcripts exist on this machine
-transcript-stats stats  --latest           # summary of the most recent session
-transcript-stats time   --latest           # effective time: caps, breaks, per day
-transcript-stats tools  --latest           # tool usage and failures
-transcript-stats segments --latest         # one row per human ask
-transcript-stats timeline --latest -n 40   # raw event stream
-transcript-stats query  --latest --role user --since 2h
-transcript-stats export --latest --format md --out report.md
-```
+| host | where the conversations live |
+| --- | --- |
+| `vscode` | `<User>/workspaceStorage/<hash>/` — `chatSessions/*.jsonl`, `GitHub.copilot-chat/transcripts/*.jsonl`, `state.vscdb` index |
+| `antigravity` | `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript*.jsonl` + `conversation_summaries.db` |
+
+See [docs/HOSTS.md](docs/HOSTS.md) for the full layout of both, including the SQLite
+schemas and the pitfalls that make naive parsing wrong.
+
+Product directories searched for VS Code: `Code`, `Code - Insiders`, `VSCodium`,
+`Cursor`, `Windsurf`, `Trae`, `Code - OSS`, `Code - Exploration` — on Windows, macOS
+and Linux. Override with `VSCODE_USER_DIR` / `GEMINI_DIR`, or `--root <dir>`.
 
 ## Commands
 
 | command | what it prints |
 | --- | --- |
-| `list` | every discovered transcript: size, modified time, session id, first prompt |
+| `hosts` | detected hosts, data roots, conversation counts, total size |
+| `sessions` (alias `list`) | every conversation across hosts: title, project, id, size, orphan state |
+| `find` | keyword search across conversations, at detail level 1–4 |
+| `show` | one conversation (`-s <id>`) at a detail level |
+| `move` | copy a VS Code conversation into another workspace storage (dry run by default) |
 | `stats` | conversation statistics, volume, tool usage, effective time, per-day activity |
 | `time` | the time model in detail: sensitivity curve, phase attribution, breaks, per day |
-| `tools` | per-tool call count, failures, argument volume, measured runtime, mean |
+| `tools` | per-tool calls, failures, argument volume, measured runtime, mean |
 | `segments` | one row per human turn: agent time, think time, event count, tool calls |
 | `timeline` | chronological events with the delta to the previous event |
 | `query` | filtered event list (type / role / tool / time / regex) |
 | `export` | `--format json \| md \| csv` |
-| `formats` | registered format adapters |
+| `formats` | registered transcript format adapters |
 | `paths` | directories searched for transcripts |
 
-### Selecting a transcript
+### Detail levels (`find`, `show`)
+
+| level | name | contains | use it for |
+| --- | --- | --- | --- |
+| **1** | compact | human requests only, hard truncated | scanning what you asked for |
+| **2** | dialogue | + model prose (no tools, no output) | recovering the decision and its reasoning |
+| **3** | actions | + one-line tool badges with status | following what actually changed |
+| **4** | audit | + tool output, arguments, raw payloads | debugging a failure |
+
+Search is level-aware: a level-2 search can never be buried by a tool log.
 
 ```bash
---file <path|sessionId|prefix>   explicit file, session id, or unique prefix
---latest                         most recently modified transcript (default)
---all                            aggregate every transcript on the machine
---root <dir>                     extra VS Code user-data dir to search (repeatable)
+transcript-stats find -k "migration" -l 2 --max-results 5
+transcript-stats find -k "ETIMEDOUT" -l 4 --grep-scope output
+transcript-stats show -s 6f36e30a -l 3 > conversation.md
 ```
 
-`--file` accepts a full path, a session id, a unique prefix of one
-(`--file a1b2c3d4`), or any substring of the path.
+### Selecting a conversation
+
+```bash
+-s, --session <id|prefix|title>   conversation id, unique prefix, or title substring
+-f, --file <path|prefix>          explicit transcript file
+    --latest                      most recent transcript across hosts (default)
+    --all                         aggregate every discovered transcript
+    --host <vscode|antigravity>   restrict to one host (repeatable)
+    --root <dir>                  extra data dir to search (repeatable)
+```
 
 ### Filters
 
 ```bash
---type user.message,assistant.message   event type(s)
+--type user.message,assistant.message       event type(s)
 --role user|assistant|tool|system
 --tool run_in_terminal
---grep <regex>                          case-insensitive unless you add (?-i)
---grep-scope content|args|tool|all      default: content
+--grep <regex>                              case-insensitive unless you add (?-i)
+--grep-scope content|args|output|tool|all   default: content
 --since 2026-09-01 | 90m | 2h | 3d
 --until <same syntax>
---index 100:250                         normalised event index range
+--index 100:250                             normalised event index range
 ```
 
 ### Time-model knobs
 
 ```bash
---cap 5m            silence counted as work, per gap (default 5m)
---break 30m         silence reported as an interruption (default 30m)
+--cap 5m               silence counted as work, per gap (default 5m)
+--break 30m            silence reported as an interruption (default 30m)
 --caps 30s,1m,5m,30m   override the sensitivity curve
 ```
 
 ### Output
 
 ```bash
---json          machine-readable output
---md            markdown (export)
---csv           csv (export)
---out <file>    write to a file instead of stdout
---limit <n>     cap rows / events
---no-color      disable ANSI colour
+--json / --md / --csv / --out <file> / --limit <n> / --no-color
 ```
 
 ---
 
-## How effective time is computed
+## Moving a conversation between workspaces
 
+`move` copies a VS Code conversation (chat state + agent transcript + history index
+entry) from the storage folder that owns it into another one, so it reappears in a
+different window. It is built to be impossible to run by accident:
+
+```bash
+# 1. see what would happen (nothing is written)
+transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User
+
+# 2. do it (only after the editor is closed)
+transcript-stats move -s 6f36e30a --to bbbb2222 --data-dir ~/.config/Code/User --apply
 ```
-effective time (cap 5m)   4h 3m  = 13.4% of span
-idle (breaks + untouched)        1d 2h 9m
-breaks > 30m                     3
+
+- `--data-dir` is **required** — there is no implicit target.
+- Default is a **dry run**; `--apply` is required to write.
+- Writing into an OS-default profile is refused unless `--i-know-what-im-doing`.
+- Writing while the editor is running is refused (it would clobber the in-memory index
+  on the next flush) unless `--allow-running`.
+- `state.vscdb` is copied to a timestamped `.bak-…` before the first write.
+- The source is **never** modified and nothing is ever deleted.
+- Re-running is idempotent.
+
+See [docs/SAFETY.md](docs/SAFETY.md).
+
+## Sandbox verification
+
+Everything is verified against a synthetic data tree, in a throwaway container, so the
+checks never touch a live profile:
+
+```bash
+npm run verify                 # unit suite + sandbox E2E on the host
+npm run sandbox                # sandbox E2E only (generates a temp tree and removes it)
+
+docker build -f Dockerfile.verify -t transcript-stats-verify .
+docker run --rm --network none transcript-stats-verify
 ```
+
+The sandbox generates fake VS Code storages (including `state.vscdb` and an orphaned
+session) and a fake Antigravity brain, then asserts that a migration leaves its source
+byte-identical, takes a backup, merges the index, and stays idempotent.
+
+## Effective time model
 
 1. Every event with a parsable timestamp is sorted chronologically.
 2. The gaps between consecutive events are summed, each capped at `--cap`.
-3. That sum is the **effective time**. Span minus effective time is idle.
+3. That sum is the **effective time**; span minus effective time is idle.
 
-Gaps are also attributed to a phase by the event that *ends* the gap, because the
-silence before an event is the time spent producing it:
+Gaps are attributed to a phase by the event that *ends* the gap, because the silence
+before an event is the time spent producing it:
 
 ```
 phase                                              gaps         raw  capped(5m)
@@ -195,77 +255,61 @@ phase                                              gaps         raw  capped(5m)
 human think time (gap before a user message)         19     19h 40m         48m
 model generation (gap before an assistant event)    812      8h 12m       1h 12m
 tool execution (gap before a tool completion)       419      2h 3m        2h 3m
-
-  human 48m + agent 1h 12m + tool 2h 3m ≈ 4h 3m
 ```
 
-Tool runtime is *also* measured exactly by pairing `tool.execution_start` with
-`tool.execution_complete` on `toolCallId`, so you get an independent check on the
-gap-based number.
+Tool runtime is *also* measured exactly by pairing a call with its result, so the
+gap-based number can be cross-checked.
 
-### Caveats that the tool will not hide from you
+### Caveats the tool will not hide
 
-- **Tool runtime is not work.** A `run_in_terminal` call that waited five minutes for
-  a build, or for you to answer a prompt, is five minutes of *clock*, not of effort.
+- **Tool runtime is not effort.** A `run_in_terminal` that waited five minutes for a
+  build is five minutes of *clock*, not of work.
 - **Caps are biased by tool cadence.** A long autonomous tool call looks like a
   silence. Raise `--cap` if you run long builds; lower it if you step away often.
-- **The log is append-only and only as complete as the producer.** Missing
-  timestamps are counted and reported, never silently dropped.
-- **Unknown event types are preserved**, not discarded, so future producers do not
-  break the numbers.
-
----
-
-## Discovery
-
-Transcripts are found automatically for `Code`, `Code - Insiders`, `VSCodium`,
-`Cursor`, `Windsurf`, `Trae` and similar builds:
-
-| OS | user-data root |
-| --- | --- |
-| Windows | `%APPDATA%\<Product>\User` |
-| macOS | `~/Library/Application Support/<Product>/User` |
-| Linux | `$XDG_CONFIG_HOME/<Product>/User` (default `~/.config`) |
-
-Override with `VSCODE_USER_DIR=/path/to/User` or `--root`.
+- **The log is only as complete as the producer.** Missing timestamps are counted and
+  reported, never silently dropped.
+- **Unknown event types are preserved**, so a producer update does not break the
+  numbers.
 
 ## Library API
 
 ```js
-import { findTranscriptFiles, parseTranscript, computeStats } from 'copilot-transcript-stats';
+import { allSessions, parseTranscript, computeStats, findSession } from 'copilot-transcript-stats';
 
-const [newest] = await findTranscriptFiles();
-const parsed = await parseTranscript(newest.file);
+const sessions = await allSessions();                     // both hosts
+const one = findSession(sessions, '6f36e30a');
+const parsed = await parseTranscript(one.transcriptPath);
 const stats = computeStats(parsed, { capMs: 300_000 });
 
-console.log(stats.counts.humanTurns);      // real asks
-console.log(stats.timing.active.ms);       // effective time
-console.log(stats.tools[0]);               // busiest tool
+console.log(stats.format);           // antigravity-transcript | vscode-transcript
+console.log(stats.counts.humanTurns);
+console.log(stats.timing.active.ms);
 ```
 
-Everything is exported from `src/index.js`: discovery, parsing, statistics, timing,
-querying and every renderer.
+Everything is exported from `src/index.js`: hosts, discovery, parsing, statistics,
+timing, search, querying, migration and every renderer.
 
 ## Adding a format adapter
 
-`src/formats/vscode-transcript.js` is intentionally a small, isolated module that maps
-one on-disk format onto the normalised event shape (`{ type, role, ts, text, toolName,
-success, argsText, … }`). To support another producer, implement
-`looksLike()` + `normalize()` and register it. The analysis layer never touches raw
-JSON. See [docs/TRANSCRIPT-FORMAT.md](docs/TRANSCRIPT-FORMAT.md) for the wire format.
+`src/formats/*.js` maps one on-disk format onto the normalised event shape
+(`{ type, role, ts, text, observation, toolName, success, argsText, … }`). Implement
+`looksLike()` + `normalize()` (+ optional `finalize()` for cross-event pairing such as
+request/result matching) and register it in `src/formats/index.js`. The analysis layer
+never touches raw JSON.
 
-Note that VS Code `chatSessions/*.jsonl` is a *different* format (a patch/operation
-log, not an event log) and is deliberately not parsed here.
+`src/formats/vscode-transcript.js` is the worked example of a request/result format;
+`src/formats/antigravity-transcript.js` is the worked example of a combined event
+format.
 
 ## Development
 
 ```bash
-npm test        # node:test, no dependencies, 37 specs
+npm run verify     # 54 unit specs + 46 sandbox checks
 ```
 
-The test-suite is built on fully synthetic transcripts (`test/fixtures.js`) with
-hand-computed expectations, so every timing number is verified arithmetic rather than
-a snapshot of whatever the code happened to output.
+The unit tests are built on fully synthetic transcripts with hand-computed
+expectations, so every timing number is verified arithmetic rather than a snapshot of
+whatever the code happened to output.
 
 ## License
 

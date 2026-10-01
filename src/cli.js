@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { findTranscriptFiles, listTranscripts, userDataDirs } from './discover.js';
-import { parseTranscript } from './parse.js';
+import { parseTranscript, readHead } from './parse.js';
 import { computeStats, sanityWarnings } from './stats.js';
 import { DEFAULT_BREAK_MS, DEFAULT_CAP_MS, analyzeTiming, capLabel } from './timing.js';
 import { buildFilter, queryEvents } from './query.js';
@@ -10,50 +10,86 @@ import {
   exportCsv,
   exportJson,
   exportMarkdown,
-  renderList,
+  renderHosts,
+  renderMovePlan,
   renderQuery,
+  renderSearchResults,
   renderSegments,
+  renderSessions,
   renderStats,
   renderTime,
   renderTimeline,
   renderTools,
 } from './render.js';
-import * as adapter from './formats/vscode-transcript.js';
+import { detect, formatList } from './formats/index.js';
+import { HOSTS, allSessions, findSession, inventory, byId as hostById } from './hosts/index.js';
+import { moveSession } from './hosts/vscode.js';
+import { LEVEL_DEFAULT_CHARS, levelName, searchSessions } from './search.js';
+import { SafetyError, formatSafetyError } from './safety.js';
+import { sqliteAvailable } from './sqlite.js';
 import { DAY, HOUR, MIN, SEC, makeStyler, parseTimeArg } from './util.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 const HELP = `copilot-transcript-stats ${VERSION}
-Analyse VS Code Copilot Chat agent transcripts (JSONL).
+Analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity.
 
 USAGE
   transcript-stats <command> [options]
 
-COMMANDS
-  list        discover transcripts on this machine
-  stats       conversation statistics + effective development time (default)
-  time        effective development time detail (incl. breaks, per-day)
-  tools       tool usage breakdown
-  segments    one row per human turn (agent time / think time / tool calls)
-  timeline    raw chronological event list
-  query       filter events (by type / role / tool / time / text)
-  export      dump stats or events as json | md | csv
-  formats     list registered format adapters
-  paths       print the directories searched for transcripts
-  help        this text
+HOSTS
+  vscode       VS Code Copilot Chat  (transcripts/*.jsonl event log + chatSessions)
+  antigravity  Antigravity Brain     (brain/<id>/.system_generated/logs/transcript*.jsonl)
 
-SELECTING A TRANSCRIPT
-  -f, --file <path|sessionId|prefix>   explicit file, session id, or unique prefix
-      --latest                         most recently modified transcript (default)
-      --all                            aggregate every discovered transcript
-      --root <dir>                     extra user-data dir to search (repeatable)
+COMMANDS
+  hosts                  detected hosts, data roots and conversation counts
+  sessions (alias list)  every conversation across hosts: title, project, id, size
+  find                   keyword search across hosts, with detail levels 1-4
+  show                   print one conversation (-s <id>) at a detail level
+  move                   copy a VS Code conversation into another workspace storage
+  stats                  statistics for one transcript (default)
+  time                   effective development time detail
+  tools                  tool usage breakdown
+  segments               one row per human turn (agent time / think time / tools)
+  timeline               raw chronological event list
+  query                  filter events (type / role / tool / time / text)
+  export                 dump stats or events as json | md | csv
+  formats                registered transcript format adapters
+  paths                  directories searched for transcripts
+  help                   this text
+
+SELECTING A CONVERSATION
+  -s, --session <id|prefix|title>   conversation id, unique prefix, or title substring
+  -f, --file <path|prefix>          explicit transcript file
+      --latest                      most recent transcript across hosts (default)
+      --all                         aggregate every discovered transcript
+      --host <vscode|antigravity>   restrict to one host (repeatable)
+      --root <dir>                  extra data dir to search (repeatable)
+
+SEARCH / DETAIL (find, show)
+  -k, --keyword <text>      keyword (or --regex pattern)
+      --regex               treat --keyword as a regular expression
+  -l, --level <1-4>         1 compact, 2 dialogue (default), 3 actions, 4 audit
+      --max-chars <n>       clip each message (default depends on level)
+      --context <n>         entries of context around each match (default 1)
+      --max-results <n>     max conversations to print (default 10)
+  -p, --project <text>      filter by workspace/project path substring
+  -t, --title <text>        filter by conversation title substring
+
+MOVING A CONVERSATION (VS Code only)
+  -s, --session <id>        conversation to move
+      --to <hash|path>      destination workspaceStorage folder (hash prefix or path)
+      --data-dir <path>     REQUIRED: the user-data root that contains it
+      --apply               actually write (default is a dry run)
+      --i-know-what-im-doing  allow writing into a live data directory
+      --allow-running       allow writing while the host application is running
 
 FILTERS (query / timeline / export)
       --type <t>          event type, repeatable / comma separated
       --role <r>          user | assistant | tool | system
-      --tool <name>       tool name (tool.execution_start only)
+      --tool <name>       tool name
       --grep <regex>      case-insensitive by default
-      --grep-scope <s>    content (default) | args | tool | all
+      --grep-scope <s>    content (default) | args | output | tool | all
       --since <when>      ISO date, epoch ms, or relative (90m, 2h, 3d)
       --until <when>      same syntax as --since
       --index <a:b>       inclusive normalised event index range
@@ -64,12 +100,7 @@ TIME MODEL
       --caps <list>       override the sensitivity curve, e.g. 30s,1m,5m,30m
 
 OUTPUT
-      --json              machine readable output
-      --md                markdown output (export defaults per command)
-      --out <file>        write to a file instead of stdout
-      --limit <n>         cap the number of rows / events
-      --no-color          disable ANSI colours
-      --explain           print the assumptions behind the numbers
+      --json / --md / --csv / --out <file> / --limit <n> / --no-color
 `;
 
 export async function main(argv) {
@@ -82,7 +113,7 @@ export async function main(argv) {
     process.stdout.write(HELP);
     return 0;
   }
-  if (command === '--version' || command === '-v' || command === 'version') {
+  if (command === 'version' || command === '--version' || command === '-v') {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
@@ -90,58 +121,255 @@ export async function main(argv) {
   const color = opts.color !== false && process.stdout.isTTY;
   const st = makeStyler(color);
 
-  switch (command) {
-    case 'list':
-      return cmdList(opts, st);
-    case 'paths':
-      return cmdPaths();
-    case 'formats':
-      return cmdFormats(st);
-    case 'stats':
-    case 'time':
-    case 'tools':
-    case 'segments':
-    case 'timeline':
-    case 'query':
-    case 'export':
-      return cmdAnalysis(command, opts, st);
-    default:
-      process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
-      return 1;
+  try {
+    switch (command) {
+      case 'hosts':
+        return await cmdHosts(opts, st);
+      case 'paths':
+        return await writeOut(userDataDirs().join('\n'), opts);
+      case 'formats':
+        return await cmdFormats(opts, st);
+      case 'sessions':
+      case 'list':
+      case 'conversations':
+        return await cmdSessions(opts, st);
+      case 'find':
+      case 'search':
+        return await cmdFind(opts, st);
+      case 'show':
+        return await cmdShow(opts, st);
+      case 'move':
+        return await cmdMove(opts, st);
+      case 'stats':
+      case 'time':
+      case 'tools':
+      case 'segments':
+      case 'timeline':
+      case 'query':
+      case 'export':
+        return await cmdAnalysis(command, opts, st);
+      default:
+        process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
+        return 1;
+    }
+  } catch (err) {
+    process.stderr.write(`${formatSafetyError(err)}\n`);
+    if (err?.code === 'EAMBIGUOUS') return 2;
+    if (err?.code === 'ENOSQLITE') return 3;
+    if (process.env.TRANSCRIPT_STATS_DEBUG) process.stderr.write(`${err?.stack}\n`);
+    return 1;
   }
 }
 
-/* --------------------------------------------------------------- commands */
+/* ------------------------------------------------------------------ hosts */
 
-async function cmdList(opts, st) {
-  const rows = await listTranscripts({ roots: opts.root, filter: opts.filter });
-  const limited = opts.limit ? rows.slice(0, opts.limit) : rows;
+async function cmdHosts(opts, st) {
+  const inv = await inventory({ roots: opts.root });
+  if (opts.json) return writeOut(JSON.stringify(inv, null, 2), opts);
+  return writeOut(renderHosts(inv, { styler: st }), opts);
+}
+
+function cmdFormats(opts, st) {
+  const list = formatList();
+  if (opts.json) return writeOut(JSON.stringify(list, null, 2), opts);
+  const lines = [st.bold('Transcript format adapters')];
+  for (const f of list) {
+    lines.push('');
+    lines.push(`${st.cyan(f.id)}`);
+    lines.push(`  ${f.description}`);
+    if (f.types.length) lines.push(st.gray(`  types: ${f.types.join(', ')}`));
+  }
+  lines.push('');
+  lines.push(st.gray('Unknown event types are preserved and reported, never dropped.'));
+  return writeOut(lines.join('\n'), opts);
+}
+
+/* --------------------------------------------------------------- sessions */
+
+async function cmdSessions(opts, st) {
+  const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
+  const filtered = applySessionFilters(sessions, opts);
+  const limited = opts.limit ? filtered.slice(0, opts.limit) : filtered;
+  if (opts.json) return writeOut(JSON.stringify(limited, null, 2), opts);
+  return writeOut(
+    renderSessions(limited, { styler: st, limit: opts.limit || 60, total: filtered.length }),
+    opts
+  );
+}
+
+function applySessionFilters(sessions, opts) {
+  let out = sessions;
+  if (opts.project) {
+    const p = String(opts.project).toLowerCase();
+    out = out.filter((s) => (s.project ?? '').toLowerCase().includes(p));
+  }
+  if (opts.title) {
+    const t = String(opts.title).toLowerCase();
+    out = out.filter((s) => (s.title ?? '').toLowerCase().includes(t));
+  }
+  if (opts.withLog) out = out.filter((s) => s.transcriptPath);
+  if (opts.orphansOnly) out = out.filter((s) => s.indexed === false);
+  return out;
+}
+
+/* ------------------------------------------------------------------- find */
+
+async function cmdFind(opts, st) {
+  const sessions = applySessionFilters(
+    await allSessions({ hosts: opts.host, roots: opts.root }),
+    opts
+  );
+  if (!sessions.length) return writeOut('No conversations found for this host/root.', opts);
+
+  let pool = sessions;
+  if (opts.session) {
+    const one = findSession(sessions, opts.session);
+    if (!one) throw new Error(`No conversation matched --session ${opts.session}`);
+    pool = [one];
+  } else if (opts.limit && !opts.keyword) {
+    pool = sessions.slice(0, opts.limit);
+  }
+
+  const results = await searchSessions(pool, {
+    keyword: opts.keyword,
+    regex: opts.regex,
+    level: opts.level ?? 2,
+    maxChars: opts.maxChars,
+    maxResults: opts.limit || opts.maxResults || 10,
+    context: opts.context ?? 1,
+    requireTranscript: true,
+  });
+
   if (opts.json) {
-    return writeOut(JSON.stringify(limited, null, 2), opts);
+    return writeOut(
+      JSON.stringify(
+        results.map((r) => ({
+          session: r.session,
+          level: r.level,
+          matchedCount: r.matchedCount,
+          artifacts: r.artifacts,
+          scratch: r.scratch,
+          entries: r.entries,
+        })),
+        null,
+        2
+      ),
+      opts
+    );
   }
-  return writeOut(renderList(limited, { styler: st, total: rows.length }), opts);
+  return writeOut(renderSearchResults(results, { styler: st, level: opts.level ?? 2 }), opts);
 }
 
-function cmdPaths() {
-  return writeOut(userDataDirs().join('\n'), {});
+async function cmdShow(opts, st) {
+  if (!opts.session && !opts.file) {
+    process.stderr.write('show needs --session <id> (or --file <path>).\n');
+    return 1;
+  }
+  const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
+  const one = opts.session ? findSession(sessions, opts.session) : null;
+  const level = opts.level ?? 2;
+  const results = await searchSessions(one ? [one] : sessions, {
+    keyword: opts.keyword,
+    regex: opts.regex,
+    level,
+    maxChars: opts.maxChars ?? LEVEL_DEFAULT_CHARS[level],
+    maxResults: 1,
+    context: opts.context ?? 0,
+    filter: one ? undefined : undefined,
+    requireTranscript: true,
+  });
+  if (opts.json) {
+    return writeOut(JSON.stringify(results, null, 2), opts);
+  }
+  if (!results.length) {
+    return writeOut(
+      one && !one.transcriptPath
+        ? `No transcript file for ${one.id} (only chat state exists).`
+        : 'Nothing to show. Use --session <id>.',
+      opts
+    );
+  }
+  const out = [st.gray(`level ${level} (${levelName(level)})`)];
+  out.push(renderSearchResults(results, { styler: st, level }));
+  return writeOut(out.join('\n'), opts);
 }
 
-function cmdFormats(st) {
-  const lines = [
-    st.bold('Format adapters'),
-    `${st.cyan('vscode-transcript')}  ${adapter.FORMAT_DESCRIPTION}`,
-    '',
-    st.gray('Known event types: ' + adapter.knownTypes().join(', ')),
-    st.gray('Unknown event types are preserved and reported, never dropped.'),
-  ];
-  return writeOut(lines.join('\n'), {});
+/* ------------------------------------------------------------------- move */
+
+async function cmdMove(opts, st) {
+  if (!opts.session) throw new SafetyError('move needs --session <id>.', 'NO_SESSION');
+  if (!opts.dataDir) {
+    throw new SafetyError(
+      'move needs an explicit --data-dir <user-data root> so it cannot hit the live profile by accident.',
+      'NO_TARGET'
+    );
+  }
+  if (!opts.to) throw new SafetyError('move needs --to <storage hash|path>.', 'NO_TARGET');
+
+  const dataDir = path.resolve(String(opts.dataDir));
+  const sessions = await allSessions({ hosts: ['vscode'], roots: [dataDir] });
+  const source = findSession(sessions, opts.session);
+  if (!source) throw new Error(`No VS Code conversation matched ${opts.session} under ${dataDir}`);
+  if (source.host !== 'vscode') throw new Error('move currently supports the vscode host only.');
+
+  const target = await resolveStorageTarget(dataDir, source, opts.to);
+  if (!target) throw new Error(`No workspaceStorage matched --to ${opts.to} under ${dataDir}`);
+  if (target === source.storageDir) {
+    throw new Error('Source and target storage are the same folder.');
+  }
+
+  const plan = await moveSession({
+    source,
+    targetStorageDir: target,
+    apply: Boolean(opts.apply),
+    allowReal: Boolean(opts.allowReal),
+    allowRunning: Boolean(opts.allowRunning),
+    dataDir,
+  });
+
+  if (opts.json) return writeOut(JSON.stringify({ source, target, plan }, null, 2), opts);
+  return writeOut(renderMovePlan(plan, { styler: st, session: source, target }), opts);
 }
+
+async function resolveStorageTarget(dataDir, source, to) {
+  const raw = String(to);
+  const asPath = path.resolve(raw);
+  try {
+    const stat = await fsp.stat(asPath);
+    if (stat.isDirectory() && path.basename(path.dirname(asPath)) === 'workspaceStorage') return asPath;
+    if (stat.isDirectory() && asPath.endsWith('workspaceStorage')) return null;
+  } catch {
+    /* not a path */
+  }
+  if (path.isAbsolute(raw) || raw.includes(path.sep) || raw.includes('/')) {
+    return null;
+  }
+  const base = path.join(dataDir, 'workspaceStorage');
+  let entries = [];
+  try {
+    entries = await fsp.readdir(base);
+  } catch {
+    return null;
+  }
+  const matches = entries.filter((e) => e.startsWith(raw) && path.join(base, e) !== source.storageDir);
+  if (matches.length === 1) return path.join(base, matches[0]);
+  if (matches.length > 1) {
+    throw new SafetyError(
+      `--to ${raw} matches ${matches.length} storage folders:\n` +
+        matches.map((m) => `  ${m}`).join('\n'),
+      'EAMBIGUOUS'
+    );
+  }
+  return null;
+}
+
+/* --------------------------------------------------------------- analysis */
 
 async function cmdAnalysis(command, opts, st) {
-  const targets = await resolveTargets(opts);
+  const targets = await resolveTranscripts(opts);
   if (!targets.length) {
     process.stderr.write(
-      'No transcript found. Run `transcript-stats list` or pass --file/--root.\n'
+      'No transcript found. Run `transcript-stats sessions` or pass --session/--file/--root.\n'
     );
     return 1;
   }
@@ -167,7 +395,6 @@ async function cmdAnalysis(command, opts, st) {
         : allEvents;
     return writeOut(JSON.stringify(events, null, 2), opts);
   }
-
   if (opts.json) return writeOut(JSON.stringify(stats, null, 2), opts);
 
   switch (command) {
@@ -182,10 +409,7 @@ async function cmdAnalysis(command, opts, st) {
     case 'segments':
       return writeOut(renderSegments(stats.timing, { styler: st, limit: opts.limit || 50 }), opts);
     case 'timeline':
-      return writeOut(
-        renderTimeline(allEvents, { styler: st, limit: opts.limit || 200 }),
-        opts
-      );
+      return writeOut(renderTimeline(allEvents, { styler: st, limit: opts.limit || 200 }), opts);
     case 'query': {
       const events = queryEvents(allEvents, {
         ...filterOpts(opts),
@@ -207,11 +431,9 @@ async function cmdExport(targets, opts) {
     if (format === 'csv') {
       chunks.push(exportCsv(parsed.events));
     } else if (format === 'json') {
-      const stats = computeStats(parsed, timingOpts(opts));
-      chunks.push(exportJson(stats));
+      chunks.push(exportJson(computeStats(parsed, timingOpts(opts))));
     } else {
-      const stats = computeStats(parsed, timingOpts(opts));
-      chunks.push(exportMarkdown(stats));
+      chunks.push(exportMarkdown(computeStats(parsed, timingOpts(opts))));
     }
   }
   return writeOut(chunks.join('\n'), opts);
@@ -219,60 +441,66 @@ async function cmdExport(targets, opts) {
 
 /* ------------------------------------------------------------- resolution */
 
-async function resolveTargets(opts) {
-  if (opts.file) {
-    const direct = path.resolve(String(opts.file));
-    try {
-      const stat = await fsp.stat(direct);
-      if (stat.isFile()) return [direct];
-    } catch {
-      /* fall through to prefix matching */
+/** Resolve the transcript file(s) a command should act on. */
+async function resolveTranscripts(opts) {
+  if (opts.file) return [await resolveFileArg(opts)];
+
+  if (opts.session) {
+    const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
+    const one = findSession(sessions, opts.session);
+    if (!one) throw new Error(`No conversation matched --session ${opts.session}`);
+    if (!one.transcriptPath) {
+      throw new Error(
+        `Conversation ${one.id} has no transcript file (only chat state). Nothing to analyse.`
+      );
     }
-    const rows = await listTranscripts({ roots: opts.root });
-    const needle = String(opts.file).toLowerCase();
-    const matches = rows.filter(
-      (r) =>
-        r.name.toLowerCase().startsWith(needle) ||
-        (r.sessionId ?? '').toLowerCase().startsWith(needle) ||
-        r.file.toLowerCase().includes(needle)
-    );
-    if (matches.length === 1) return [matches[0].file];
-    if (matches.length > 1) {
-      const names = matches.map((m) => `  ${m.name.slice(0, 8)}  ${m.firstTimestamp ? new Date(m.firstTimestamp).toISOString() : ''}  ${m.file}`).join('\n');
-      throw new Error(`--file matched ${matches.length} transcripts:\n${names}`);
-    }
-    throw new Error(`No transcript matched --file ${opts.file}`);
+    return [one.transcriptPath];
   }
 
   if (opts.all) {
-    const files = await findTranscriptFiles({ roots: opts.root });
+    const extraRoot = opts.root ?? opts.dataDir ?? null;
+    const files = await findTranscriptFiles({ roots: extraRoot ? [extraRoot] : null });
     const ok = [];
     for (const f of files) {
-      // Cheap guard: a transcript's first bytes must contain a known event type.
       // eslint-disable-next-line no-await-in-loop
       const head = await readHead(f.file, 4096);
-      if (adapter.looksLike(head)) ok.push(f.file);
+      if (detect(head)) ok.push(f.file);
     }
     return ok;
   }
 
+  // --latest: newest transcript across hosts (falls back to VS Code discovery)
+  const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
+  const withLog = sessions.filter((s) => s.transcriptPath);
+  if (withLog.length) return [withLog[0].transcriptPath];
+
   const rows = await listTranscripts({ roots: opts.root, limit: 1 });
-  if (!rows.length) return [];
-  return [rows[0].file];
+  return rows.length ? [rows[0].file] : [];
 }
 
-async function readHead(file, bytes) {
-  let fh;
+async function resolveFileArg(opts) {
+  const direct = path.resolve(String(opts.file));
   try {
-    fh = await fsp.open(file, 'r');
-    const buf = Buffer.alloc(bytes);
-    const { bytesRead } = await fh.read(buf, 0, bytes, 0);
-    return buf.subarray(0, bytesRead).toString('utf8');
+    const stat = await fsp.stat(direct);
+    if (stat.isFile()) return direct;
   } catch {
-    return '';
-  } finally {
-    if (fh) await fh.close();
+    /* prefix match below */
   }
+  const sessions = await allSessions({ hosts: opts.host, roots: opts.root });
+  const needle = String(opts.file).toLowerCase();
+  const matches = sessions.filter(
+    (s) =>
+      s.transcriptPath &&
+      (s.id.toLowerCase().startsWith(needle) || s.transcriptPath.toLowerCase().includes(needle))
+  );
+  if (matches.length === 1) return matches[0].transcriptPath;
+  if (matches.length > 1) {
+    throw new Error(
+      `--file matched ${matches.length} transcripts:\n` +
+        matches.map((m) => `  ${m.id}  [${m.host}]  ${m.title}`).join('\n')
+    );
+  }
+  throw new Error(`No transcript matched --file ${opts.file}`);
 }
 
 /* ---------------------------------------------------------------- merging */
@@ -283,14 +511,25 @@ function mergeStats(list) {
   base.tools = [];
   base.requestedTools = [];
   base.byType = [];
-  base.top = { prompts: [], replies: [], toolArgs: [] };
+  base.top = { prompts: [], replies: [], toolArgs: [], observations: [] };
+  base.formats = [...new Set(list.map((s) => s.format))];
 
   const toolMap = new Map();
   const reqMap = new Map();
   const typeMap = new Map();
 
   for (const s of list) {
-    for (const k of ['humanTurns', 'assistantMessages', 'agentSegments', 'toolCalls', 'toolFailures', 'toolRequests', 'events', 'sessions']) {
+    for (const k of [
+      'humanTurns',
+      'assistantMessages',
+      'agentSegments',
+      'toolCalls',
+      'toolFailures',
+      'toolRequests',
+      'toolUnknown',
+      'events',
+      'sessions',
+    ]) {
       base.counts[k] = (base.counts[k] ?? 0) + (s.counts[k] ?? 0);
     }
     base.counts.undatedEvents += s.counts.undatedEvents ?? 0;
@@ -299,9 +538,11 @@ function mergeStats(list) {
     base.bytes += s.bytes;
     for (const k of Object.keys(base.text)) base.text[k] += s.text[k] ?? 0;
     for (const t of s.tools) {
-      const cur = toolMap.get(t.name) ?? { name: t.name, calls: 0, failed: 0, argsChars: 0, ms: 0, timed: 0 };
+      const cur =
+        toolMap.get(t.name) ?? { name: t.name, calls: 0, failed: 0, unknown: 0, argsChars: 0, ms: 0, timed: 0 };
       cur.calls += t.calls;
       cur.failed += t.failed;
+      cur.unknown += t.unknown ?? 0;
       cur.argsChars += t.argsChars;
       cur.ms += t.ms;
       cur.timed += t.timed;
@@ -314,7 +555,9 @@ function mergeStats(list) {
   base.tools = [...toolMap.values()]
     .map((t) => ({ ...t, failRate: t.calls ? t.failed / t.calls : 0 }))
     .sort((a, b) => b.calls - a.calls || b.ms - a.ms);
-  base.requestedTools = [...reqMap.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n);
+  base.requestedTools = [...reqMap.entries()]
+    .map(([name, n]) => ({ name, n }))
+    .sort((a, b) => b.n - a.n);
   base.byType = [...typeMap.entries()].map(([type, n]) => ({ type, n })).sort((a, b) => b.n - a.n);
   base.counts.uniqueTools = base.tools.length;
 
@@ -333,20 +576,25 @@ function mergeStats(list) {
       : 0,
   };
 
-  // Sum effective time across sessions: each session keeps its own wall clock.
   const t = base.timing;
-  t.span = { first: Math.min(...list.map((s) => s.timing.span.first ?? Infinity)), last: Math.max(...list.map((s) => s.timing.span.last ?? -Infinity)), ms: 0 };
-  t.span.ms = Math.max(0, t.span.last - t.span.first);
-  for (const s of list) {
-    t.active.ms += s.timing.active.ms;
-    for (const r of t.byCap) {
+  const firsts = list.map((s) => s.timing.span.first).filter((x) => x != null);
+  const lasts = list.map((s) => s.timing.span.last).filter((x) => x != null);
+  t.span = {
+    first: firsts.length ? Math.min(...firsts) : null,
+    last: lasts.length ? Math.max(...lasts) : null,
+    ms: 0,
+  };
+  t.span.ms = t.span.first != null && t.span.last != null ? Math.max(0, t.span.last - t.span.first) : 0;
+  t.active.ms = 0;
+  for (const s of list) t.active.ms += s.timing.active.ms;
+  for (const r of t.byCap) {
+    r.activeMs = 0;
+    for (const s of list) {
       const src = s.timing.byCap.find((x) => x.capMs === r.capMs);
       if (src) r.activeMs += src.activeMs;
     }
-  }
-  for (const r of t.byCap) {
-    r.idleMs = Math.max(0, list.reduce((a, s) => a + s.timing.span.ms, 0) - r.activeMs);
     const denom = list.reduce((a, s) => a + s.timing.span.ms, 0);
+    r.idleMs = Math.max(0, denom - r.activeMs);
     r.ratio = denom ? r.activeMs / denom : 0;
   }
   t.active.ratio = t.span.ms ? t.active.ms / t.span.ms : 0;
@@ -410,6 +658,34 @@ export function parseArgs(argv) {
       case '--file':
         opts.file = take(a);
         break;
+      case '-s':
+      case '--session':
+      case '--id':
+        opts.session = take(a);
+        break;
+      case '--to':
+        opts.to = take(a);
+        break;
+      case '--data-dir':
+      case '--data':
+        opts.dataDir = take(a);
+        break;
+      case '--apply':
+        opts.apply = true;
+        break;
+      case '--dry-run':
+        opts.apply = false;
+        break;
+      case '--i-know-what-im-doing':
+      case '--force-real':
+        opts.allowReal = true;
+        break;
+      case '--allow-running':
+        opts.allowRunning = true;
+        break;
+      case '--host':
+        opts.host = pushCsv(opts.host, take(a));
+        break;
       case '--root':
       case '--dir':
         opts.root = opts.root ?? [];
@@ -420,6 +696,37 @@ export function parseArgs(argv) {
         break;
       case '--all':
         opts.all = true;
+        break;
+      case '-k':
+      case '--keyword':
+        opts.keyword = take(a);
+        break;
+      case '--regex':
+        opts.regex = true;
+        break;
+      case '-l':
+      case '--level':
+        opts.level = Number(take(a)) || 2;
+        break;
+      case '--max-chars':
+        opts.maxChars = Number(take(a)) || 0;
+        break;
+      case '--context':
+        opts.context = Number(take(a));
+        break;
+      case '-p':
+      case '--project':
+        opts.project = take(a);
+        break;
+      case '-t':
+      case '--title':
+        opts.title = take(a);
+        break;
+      case '--with-log':
+        opts.withLog = true;
+        break;
+      case '--orphans':
+        opts.orphansOnly = true;
         break;
       case '--json':
         opts.json = true;
@@ -441,6 +748,9 @@ export function parseArgs(argv) {
       case '--limit':
       case '-n':
         opts.limit = Number(take(a)) || 0;
+        break;
+      case '--max-results':
+        opts.maxResults = Number(take(a)) || 0;
         break;
       case '--cap':
         opts.capMs = parseDuration(take(a), errors, '--cap');
@@ -500,7 +810,6 @@ export function parseArgs(argv) {
         opts.help = true;
         break;
       case '--version':
-      case '-v':
         if (!command) command = 'version';
         break;
       default:
@@ -525,8 +834,7 @@ function pushCsv(cur, value) {
 
 export function parseDuration(value, errors = [], label = 'duration') {
   const s = String(value ?? '').trim();
-  const re = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i;
-  const m = re.exec(s);
+  const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i.exec(s);
   if (!m) {
     errors.push(`${label}: cannot parse duration "${s}"`);
     return null;
@@ -549,4 +857,4 @@ async function writeOut(text, opts) {
   return 0;
 }
 
-export { capLabel, buildFilter, analyzeTiming };
+export { HOSTS, hostById, buildFilter, analyzeTiming, capLabel, sqliteAvailable };

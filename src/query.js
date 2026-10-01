@@ -29,8 +29,11 @@ export function buildFilter(opts = {}) {
 
 export function grepHaystack(e, scope) {
   if (scope === 'args') return e.argsText || '';
+  if (scope === 'output' || scope === 'observation') return e.observation || '';
   if (scope === 'tool') return e.toolName || '';
-  if (scope === 'all') return `${e.text || ''}\n${e.argsText || ''}\n${e.toolName || ''}`;
+  if (scope === 'all') {
+    return [e.text, e.argsText, e.observation, e.toolName].filter(Boolean).join('\n');
+  }
   return e.text || '';
 }
 
@@ -68,7 +71,7 @@ export function previewOf(e, max = 160) {
   const raw =
     e.type === 'tool.execution_start'
       ? e.argsText
-      : e.text || e.argsText || '';
+      : e.text || e.argsText || e.observation || '';
   const flat = String(raw ?? '').replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }

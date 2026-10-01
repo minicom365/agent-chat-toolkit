@@ -24,33 +24,25 @@ function kv(st, rows) {
     .join('\n');
 }
 
-/* ------------------------------------------------------------------ list */
-
-export function renderList(rows, { styler: st, total }) {
-  if (!rows.length) return 'No transcripts found.';
-  const body = rows.map((r, n) => [
-    String(n + 1),
-    localStamp(r.mtimeMs),
-    fmtBytes(r.bytes),
-    r.workspace ?? '-',
-    r.name.slice(0, 8),
-    truncate(r.firstTimestamp ? localStamp(r.firstTimestamp) : '-', 16),
-    truncate(r.firstUserMessage ?? '(no user message in first 256KB)', 46),
-  ]);
-  return [
-    h(st, `Transcripts (${rows.length}${total > rows.length ? ` of ${total}` : ''})`),
-    '',
-    table(
-      ['#', 'modified', 'size', 'workspace', 'session', 'first event', 'first prompt'],
-      body,
-      ['right', 'left', 'right', 'left', 'left', 'left', 'left']
-    ),
-    '',
-    st.gray('Use the `#` or the `session` prefix with --file (prefix matching is supported).'),
-  ].join('\n');
-}
 
 /* ----------------------------------------------------------------- stats */
+
+/** Antigravity does not name its session inside the log; the folder does. */
+function sessionIdFromPath(file) {
+  if (!file) return null;
+  const parts = String(file).split(/[\\/]/).filter(Boolean);
+  const logsAt = parts.lastIndexOf('logs');
+  const candidate = logsAt >= 2 ? parts[logsAt - 2] : null;
+  return candidate && /^[0-9a-f-]{8,}$/i.test(candidate) ? candidate : null;
+}
+
+function producerLine(meta) {
+  const parts = [];
+  if (meta.producer) parts.push(meta.producer);
+  if (meta.copilotVersion) parts.push(`copilot ${meta.copilotVersion}`);
+  if (meta.vscodeVersion) parts.push(`vscode ${meta.vscodeVersion}`);
+  return parts.length ? parts.join(' · ') : '-';
+}
 
 export function renderStats(stats, { styler: st, warnings = [] }) {
   const c = stats.counts;
@@ -61,9 +53,10 @@ export function renderStats(stats, { styler: st, warnings = [] }) {
   out.push(
     kv(st, [
       ['file', stats.file],
+      ['format', stats.format ?? '-'],
       ['size / lines', `${fmtBytes(stats.bytes)} / ${fmtInt(stats.totalLines)}`],
-      ['session id', stats.meta.sessionId ?? '-'],
-      ['producer', `${stats.meta.producer ?? '-'} (copilot ${stats.meta.copilotVersion ?? '?'}, vscode ${stats.meta.vscodeVersion ?? '?'})`],
+      ['session id', stats.meta.sessionId ?? sessionIdFromPath(stats.file) ?? '-'],
+      ['producer', producerLine(stats.meta)],
       ['window', t.span.first ? `${localStamp(t.span.first)} → ${localStamp(t.span.last)}` : '-'],
       ['wall-clock span', fmtDuration(t.span.ms)],
     ])
@@ -77,7 +70,7 @@ export function renderStats(stats, { styler: st, warnings = [] }) {
     kv(st, [
       ['human turns (user.message)', st.bold(fmtInt(c.humanTurns))],
       ['assistant messages', fmtInt(c.assistantMessages)],
-      ['agent turn markers (turn_start)', fmtInt(c.agentSegments)],
+      ['agent steps (turn markers)', fmtInt(c.agentSegments)],
       ['tool calls executed', fmtInt(c.toolCalls) + (c.toolFailures ? st.red(` (${fmtInt(c.toolFailures)} failed)`) : '')],
       ['tool calls requested by model', fmtInt(c.toolRequests)],
       ['distinct tools', fmtInt(c.uniqueTools)],
@@ -383,6 +376,163 @@ export function renderSegments(timing, { styler: st, limit = 50 }) {
       ['right', 'left', 'right', 'right', 'right', 'right', 'left']
     ),
   ].join('\n');
+}
+
+/* --------------------------------------------------------------- catalog */
+
+export function renderHosts(inventory, { styler: st }) {
+  const { rows, sqlite } = inventory;
+  const out = [h(st, 'Hosts')];
+  out.push(
+    table(
+      ['host', 'format', 'sessions', 'with transcript', 'latest', 'size'],
+      rows.map((r) => [
+        r.host,
+        r.format,
+        fmtInt(r.sessionCount),
+        fmtInt(r.withTranscript),
+        r.latestMs ? localStamp(r.latestMs) : '-',
+        fmtBytes(r.totalBytes),
+      ]),
+      ['left', 'left', 'right', 'right', 'left', 'right']
+    )
+  );
+  out.push('');
+  for (const r of rows) {
+    out.push(st.gray(`  ${r.host} roots:`));
+    for (const root of r.roots) out.push(st.gray(`    ${root}`));
+  }
+  if (!sqlite) {
+    out.push('');
+    out.push(
+      st.yellow(
+        '  node:sqlite is unavailable - conversation titles and index-backed operations are limited.'
+      )
+    );
+  }
+  return out.join('\n');
+}
+
+export function renderSessions(sessions, { styler: st, limit = 60, total = null }) {
+  if (!sessions.length) return 'No conversations found.';
+  const shown = sessions.slice(0, limit);
+  const rows = shown.map((s, n) => [
+    String(n + 1),
+    s.host,
+    s.updatedMs ? localStamp(s.updatedMs) : '-',
+    s.indexed === false ? st.yellow('orphan') : '',
+    truncate(s.title ?? '', 44),
+    truncate(s.project ?? '', 40),
+    s.id.slice(0, 8),
+    s.transcriptPath ? '' : st.gray('no-log'),
+    fmtBytes(s.sizeBytes ?? 0),
+  ]);
+  const out = [
+    h(st, `Conversations (${shown.length}${total != null && total > shown.length ? ` of ${total}` : ''})`),
+    '',
+    table(['#', 'host', 'updated', 'index', 'title', 'project', 'session', 'log', 'size'], rows, [
+      'right',
+      'left',
+      'left',
+      'left',
+      'left',
+      'left',
+      'left',
+      'left',
+      'right',
+    ]),
+    '',
+    st.gray('  session = id prefix, usable with `show`, `find --id`, or `stats --session`.'),
+  ];
+  if (sessions.length > shown.length) {
+    out.push(st.gray(`  … ${sessions.length - shown.length} more; raise --limit.`));
+  }
+  return out.join('\n');
+}
+
+export function renderSearchResults(results, { styler: st, level }) {
+  if (!results.length) return 'No conversations matched.';
+  const out = [];
+  for (const r of results) {
+    const s = r.session;
+    out.push('');
+    out.push(st.bold('─'.repeat(72)));
+    out.push(`${st.bold('■')} ${st.cyan(s.host)}  ${st.bold(s.title ?? '(untitled)')}`);
+    out.push(
+      `  ${st.gray('id')} ${s.id}   ${st.gray('updated')} ${s.updatedMs ? localStamp(s.updatedMs) : '-'}`
+    );
+    if (s.project) out.push(`  ${st.gray('project')} ${s.project}`);
+    if (s.transcriptPath) out.push(`  ${st.gray('log')} ${s.transcriptPath}`);
+    if (s.host === 'antigravity' && s.transcriptVariant) {
+      out.push(`  ${st.gray('variant')} transcript_${s.transcriptVariant === 'full' ? 'full' : ''}.jsonl`);
+    }
+    if (r.parseError) out.push(`  ${st.red(`parse error: ${r.parseError}`)}`);
+    if (r.matchedCount) out.push(`  ${st.gray(`matches: ${r.matchedCount} at level ${level}`)}`);
+    if (r.artifactHit) {
+      out.push(`  ${st.gray('artifact name matched:')}`);
+      for (const a of [...r.artifacts, ...r.scratch]) out.push(`    ${st.gray('-')} ${a}`);
+    }
+    if (!r.entries.length) {
+      out.push(st.gray('  (no content at this level)'));
+      continue;
+    }
+    out.push('');
+    for (const e of r.entries) {
+      const mark = e.matched ? '⭐' : '  ';
+      const who = e.kind === 'user' ? '👤 User' : e.kind === 'assistant' ? '🤖 Agent' : `⚙ ${e.label}`;
+      out.push(`${mark} ${st.bold(who)}`);
+      for (const line of String(e.text).split('\n')) out.push(`   ${line}`);
+    }
+    if (r.truncated) {
+      out.push(st.gray(`  … context trimmed (${r.totalEntries} entries at this level; use --level 4)`));
+    }
+  }
+  return out.join('\n');
+}
+
+export function renderMovePlan(plan, { styler: st, session, target }) {
+  const out = [h(st, plan.apply ? 'Conversation migration (applied)' : 'Conversation migration (dry run)')];
+  out.push(
+    kv(st, [
+      ['session', `${session.id}\n             ${session.title ?? ''}`],
+      ['from', session.storageDir ?? '-'],
+      ['to', target],
+      ['mode', plan.apply ? st.red('APPLY (files written)') : st.green('dry-run (nothing written)')],
+    ])
+  );
+  out.push('');
+  if (!plan.copies.length && !plan.indexMerges.length) {
+    out.push(st.gray('  Nothing to do: the target already has this conversation.'));
+  }
+  if (plan.copies.length) {
+    out.push(st.bold('  Files'));
+    out.push(
+      table(
+        ['file', 'bytes'],
+        plan.copies.map((c) => [c.dst, fmtInt(c.bytes)]),
+        ['left', 'right']
+      )
+    );
+  }
+  if (plan.indexMerges.length) {
+    out.push('');
+    out.push(st.bold('  Index entries'));
+    for (const m of plan.indexMerges) out.push(`    + ${m.sessionId}  ${m.title}`);
+  }
+  if (plan.backups?.length) {
+    out.push('');
+    out.push(st.bold('  Backups'));
+    for (const b of plan.backups) out.push(`    ${b}`);
+  }
+  if (plan.warnings?.length) {
+    out.push('');
+    for (const w of plan.warnings) out.push(st.yellow(`  ! ${w}`));
+  }
+  if (!plan.apply) {
+    out.push('');
+    out.push(st.gray('  Re-run with --apply to write. A timestamped backup of state.vscdb is taken first.'));
+  }
+  return out.join('\n');
 }
 
 /* ----------------------------------------------------------------- query */

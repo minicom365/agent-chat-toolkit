@@ -18,6 +18,11 @@ reports/
 *.transcript.json
 *.report.md
 
+# generated sandbox trees
+.sandbox/
+_sandbox/
+*.vscdb.bak-*
+
 # editors
 .vscode/
 .idea/

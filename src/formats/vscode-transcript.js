@@ -178,6 +178,66 @@ export function extractMeta(events) {
   };
 }
 
+/** Keys that make a readable one-line tool badge, most specific first. */
+const SUMMARY_KEYS = [
+  'command',
+  'filePath',
+  'path',
+  'query',
+  'pattern',
+  'url',
+  'toolName',
+  'prompt',
+  'message',
+];
+
+export function summarizeToolArgs(toolName, argsText) {
+  if (!argsText) return toolName;
+  let args = null;
+  try {
+    args = JSON.parse(argsText);
+  } catch {
+    return `${toolName}(${String(argsText).replace(/\s+/g, ' ').slice(0, 60)})`;
+  }
+  if (!args || typeof args !== 'object') return toolName;
+  for (const key of SUMMARY_KEYS) {
+    const v = args[key];
+    if (typeof v === 'string' && v) {
+      const short = v.length > 60 ? `${v.slice(0, 59)}…` : v;
+      return `${toolName}(${short})`;
+    }
+  }
+  return toolName;
+}
+
+/**
+ * Pair each `tool.execution_complete` with its `tool.execution_start` so the
+ * start event carries the outcome. Statistics still count both events, but the
+ * search projection can then render one badge per call, with its status.
+ */
+export function finalize(events) {
+  const open = new Map();
+  for (const e of events) {
+    if (e.type === 'tool.execution_start') {
+      open.set(e.toolCallId ?? `i${e.i}`, e);
+      continue;
+    }
+    if (e.type !== 'tool.execution_complete') continue;
+    const start = open.get(e.toolCallId ?? '');
+    if (!start) continue;
+    start.success = e.success;
+    start.argsSummary = summarizeToolArgs(start.toolName, start.argsText);
+    if (start.ts != null && e.ts != null) start.toolMs = Math.max(0, e.ts - start.ts);
+    e.linkedToolIndex = start.i;
+    open.delete(e.toolCallId ?? '');
+  }
+  for (const e of events) {
+    if (e.type === 'tool.execution_start' && e.argsSummary == null) {
+      e.argsSummary = summarizeToolArgs(e.toolName, e.argsText);
+    }
+  }
+}
+
 function safeStringify(value) {
   if (value == null) return '';
   if (typeof value === 'string') return value;

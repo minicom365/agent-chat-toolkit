@@ -1,17 +1,19 @@
 {
   "name": "copilot-transcript-stats",
-  "version": "0.1.0",
-  "description": "Zero-dependency CLI that analyzes VS Code Copilot Chat agent transcripts: conversation statistics, tool-call breakdowns and timestamp-based effective development time estimation.",
+  "version": "0.2.0",
+  "description": "Zero-dependency CLI to analyse and navigate agent conversations kept by VS Code Copilot Chat and Antigravity: statistics, tool usage, effective development time and conversation migration.",
   "keywords": [
     "copilot",
     "copilot-chat",
+    "antigravity",
     "vscode",
     "transcript",
     "jsonl",
     "agent",
     "cli",
     "statistics",
-    "time-tracking"
+    "time-tracking",
+    "conversation-history"
   ],
   "license": "MIT",
   "type": "module",
@@ -26,12 +28,17 @@
     "bin",
     "src",
     "docs",
+    "tools",
     "README.md",
+    "README.ko.md",
     "LICENSE"
   ],
   "scripts": {
     "start": "node bin/transcript-stats.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "sandbox": "node tools/sandbox-e2e.mjs",
+    "sandbox:make": "node tools/make-sandbox.mjs --out .sandbox --force",
+    "verify": "npm test && npm run sandbox"
   },
   "repository": {
     "type": "git",

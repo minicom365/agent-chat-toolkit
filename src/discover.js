@@ -28,10 +28,19 @@ export const TRANSCRIPT_GLOBS = [
 ];
 
 /** Candidate VS Code user-data directories for the current OS. */
-export function userDataDirs() {
+/**
+ * Candidate VS Code user-data directories for the current OS.
+ * @param {{ useEnv?: boolean }} [opts] `useEnv:false` ignores the VSCODE_USER_DIR
+ *   override, which is how the write-safety guard identifies the *real* profile.
+ */
+export function userDataDirs(opts = {}) {
+  const { useEnv = true } = opts;
   const home = os.homedir();
   const dirs = [];
-  if (process.env.VSCODE_USER_DIR) dirs.push(process.env.VSCODE_USER_DIR);
+  // An explicit VSCODE_USER_DIR *replaces* the product list rather than adding
+  // to it, so `VSCODE_USER_DIR=<sandbox> transcript-stats hosts` sees only the
+  // sandbox. This is what makes the sandbox verification meaningful.
+  if (useEnv && process.env.VSCODE_USER_DIR) return [process.env.VSCODE_USER_DIR];
 
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
